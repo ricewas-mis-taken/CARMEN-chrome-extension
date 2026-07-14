@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Focus Tracker",
+  "version": "0.1.0",
+  "description": "Tracks tab activity during focus sessions and flags off-topic tabs.",
+  "permissions": ["tabs", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
