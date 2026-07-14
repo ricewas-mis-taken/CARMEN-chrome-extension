@@ -3,8 +3,12 @@
   "name": "Focus Tracker",
   "version": "0.1.0",
   "description": "Tracks tab activity during focus sessions and flags off-topic tabs.",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "scripting", "alarms"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html"
   }
 }

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Focus Tracker</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- SETUP VIEW -->
+      <section id="setup-view" class="view">
+        <header class="header">
+          <div class="logo-dot"></div>
+          <h1>Focus Tracker</h1>
+        </header>
+
+        <div class="field">
+          <label>Duration</label>
+          <div class="preset-row">
+            <button type="button" class="preset-btn" data-minutes="15">15m</button>
+            <button type="button" class="preset-btn" data-minutes="25">25m</button>
+            <button type="button" class="preset-btn" data-minutes="45">45m</button>
+            <button type="button" class="preset-btn" data-minutes="60">60m</button>
+          </div>
+          <input
+            type="number"
+            id="custom-minutes"
+            min="1"
+            placeholder="Custom minutes"
+          />
+        </div>
+
+        <div class="field">
+          <label>Lock mode</label>
+          <div class="lock-toggle">
+            <button type="button" class="lock-card selected" id="lock-soft" data-mode="soft">
+              <span class="lock-title">Soft Lock</span>
+              <span class="lock-desc">Shows a 5-second warning, then lets you stay.</span>
+            </button>
+            <button type="button" class="lock-card" id="lock-hard" data-mode="hard">
+              <span class="lock-title">Hard Lock</span>
+              <span class="lock-desc">Instantly redirects you back, no warning.</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="whitelist">Acceptable tabs</label>
+          <textarea
+            id="whitelist"
+            rows="4"
+            placeholder="github.com&#10;docs.google.com&#10;stackoverflow.com"
+          ></textarea>
+          <span class="hint">One domain or URL substring per line.</span>
+        </div>
+
+        <button type="button" id="start-btn" class="primary-btn">
+          Start Focus Session
+        </button>
+      </section>
+
+      <!-- ACTIVE SESSION VIEW -->
+      <section id="active-view" class="view hidden">
+        <header class="header">
+          <div class="logo-dot"></div>
+          <h1>Focus Tracker</h1>
+        </header>
+
+        <div class="countdown" id="countdown">00:00</div>
+
+        <div class="meta-row">
+          <span class="badge" id="mode-badge">Soft Lock</span>
+          <span class="badge" id="violation-badge">0 violations</span>
+        </div>
+
+        <button type="button" id="nuclear-btn" class="nuclear-btn">
+          Nuclear — End Session Now
+        </button>
+      </section>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
