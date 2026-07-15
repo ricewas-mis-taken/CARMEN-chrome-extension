@@ -17,6 +17,7 @@ function defaultSession() {
     processWhitelist: [],
     lastAcceptableUrl: "",
     violationCount: 0,
+    violationLog: [],
   };
 }
 
@@ -30,24 +31,19 @@ async function apiFetch(path, options) {
   return res.json();
 }
 
-// Epoch-ms timestamps are ~13 digits; epoch-seconds are ~10. Normalize
-// defensively since the desktop app's units for end_time aren't pinned down
-// here — if this guess is wrong, fix it in this one spot.
-function normalizeEndTime(value) {
-  if (!value) return 0;
-  return value < 1e12 ? value * 1000 : value;
-}
-
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
     return {
-      isActive: !!data.active,
-      endTime: normalizeEndTime(data.end_time),
-      lockMode: data.lock_mode || "soft",
-      domainWhitelist: data.domain_whitelist || [],
-      processWhitelist: data.process_whitelist || [],
-      violationCount: data.violation_count || 0,
+      isActive: !!data.isActive,
+      // The API reports secondsRemaining, not an absolute end_time — derive
+      // one for the countdown/alarm logic that wants a timestamp to compare against.
+      endTime: data.isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
+      lockMode: data.lockMode || "soft",
+      domainWhitelist: data.domainWhitelist || [],
+      processWhitelist: data.processWhitelist || [],
+      violationCount: data.violationCount || 0,
+      violationLog: data.violationLog || [],
       lastAcceptableUrl,
     };
   } catch (err) {
@@ -71,6 +67,16 @@ function isWhitelisted(url, whitelist) {
   });
 }
 
+// Hard lock needs somewhere safe to send the tab. If we haven't seen a
+// whitelisted URL yet this session, fall back to the first whitelist entry
+// instead of doing nothing.
+function buildFallbackUrl(domainWhitelist) {
+  const first = (domainWhitelist || []).find((entry) => (entry || "").trim().length > 0);
+  if (!first) return "";
+  const trimmed = first.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 function formatTimeRemaining(endTime) {
   const msLeft = Math.max(0, endTime - Date.now());
   const totalSeconds = Math.ceil(msLeft / 1000);
@@ -82,11 +88,67 @@ function formatTimeRemaining(endTime) {
   return `${seconds}s`;
 }
 
+function formatDurationSeconds(totalSeconds) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${remainingSeconds}s`;
+}
+
+// Fires the "session complete" notification for a natural (alarm-based) end.
+// GET /status self-finalizes an expired session on any poll (e.g. the popup's
+// 3s status poll), which resets violationCount/violationLog to zero before
+// our own /session/end call can see them — so read the just-appended entry
+// from GET /history instead, which always has the real numbers regardless of
+// who finalized the session first.
+async function notifySessionComplete() {
+  try {
+    const history = await apiFetch("/history", { method: "GET" });
+    const lastEntry = history[history.length - 1];
+    if (!lastEntry) return;
+
+    const violationLog = lastEntry.violationLog || [];
+    const domainViolations = violationLog.filter((entry) => entry.kind === "domain");
+
+    const now = Date.now();
+    const offTaskSeconds = domainViolations.reduce((total, entry) => {
+      if (typeof entry.durationSeconds === "number") {
+        return total + entry.durationSeconds;
+      }
+      // Still open when the session ended: count it through to session end.
+      const startedAt = new Date(entry.timestamp).getTime();
+      return total + Math.max(0, (now - startedAt) / 1000);
+    }, 0);
+
+    const count = domainViolations.length;
+    const message =
+      count > 0
+        ? `${count} tab violation${count === 1 ? "" : "s"}, ${formatDurationSeconds(
+            offTaskSeconds
+          )} off-task.`
+        : "No tab violations — nice work.";
+
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icon128.png"),
+      title: "Focus session complete — you're free to go!",
+      message,
+    });
+  } catch (err) {
+    console.warn("Focus Tracker: could not build session-complete notification.", err);
+  }
+}
+
 // Tracks the last URL we already evaluated per tab, so repeated onUpdated /
 // onActivated events for the same navigation don't double-count violations.
 const lastHandledUrlByTab = new Map();
 
 async function handleTabUrl(tabId, url) {
+  console.log("Focus Tracker: handleTabUrl fired", { tabId, url });
+
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (lastHandledUrlByTab.get(tabId) === url) return;
   lastHandledUrlByTab.set(tabId, url);
@@ -94,21 +156,58 @@ async function handleTabUrl(tabId, url) {
   const session = await getSession();
   if (!session.isActive) return;
 
-  if (isWhitelisted(url, session.domainWhitelist)) {
+  const whitelisted = isWhitelisted(url, session.domainWhitelist);
+  console.log("Focus Tracker: checking url against domainWhitelist", {
+    url,
+    domainWhitelist: session.domainWhitelist,
+    whitelisted,
+  });
+
+  if (whitelisted) {
     lastAcceptableUrl = url;
+    // The desktop app can't observe tab changes itself, so tell it whenever
+    // the active tab goes from off-whitelist to on-whitelist, in case a
+    // domain violation was open and needs to be resolved.
+    try {
+      await apiFetch("/violation/resolved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "domain" }),
+      });
+    } catch (err) {
+      console.warn(
+        "Focus Tracker: could not report violation resolution to desktop app.",
+        err
+      );
+    }
     return;
   }
 
-  // Violation counting itself is owned by the desktop app (see /status);
-  // the extension has no endpoint to report this violation upstream.
+  // Violation counting is owned by the desktop app; report it so /status's
+  // violation_count reflects what actually happened in the browser.
+  try {
+    await apiFetch("/violation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+  } catch (err) {
+    console.warn("Focus Tracker: could not report violation to desktop app.", err);
+  }
 
   if (session.lockMode === "hard") {
-    if (lastAcceptableUrl && lastAcceptableUrl !== url) {
+    const redirectTarget = lastAcceptableUrl || buildFallbackUrl(session.domainWhitelist);
+    if (redirectTarget && redirectTarget !== url) {
       try {
-        await chrome.tabs.update(tabId, { url: lastAcceptableUrl });
+        await chrome.tabs.update(tabId, { url: redirectTarget });
+        lastAcceptableUrl = redirectTarget;
       } catch (err) {
         // Tab may no longer exist; ignore.
       }
+    } else if (!redirectTarget) {
+      console.warn(
+        "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to redirect to."
+      );
     }
     return;
   }
@@ -130,8 +229,14 @@ async function handleTabUrl(tabId, url) {
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  console.log("Focus Tracker: onActivated fired", { tabId });
   try {
     const tab = await chrome.tabs.get(tabId);
+    // Switching back to a tab is a fresh "the user is looking at this now"
+    // event — re-evaluate even if we already handled this exact URL before,
+    // so the soft-lock overlay (which auto-dismisses after its grace period)
+    // reappears instead of staying silently suppressed.
+    lastHandledUrlByTab.delete(tabId);
     await handleTabUrl(tabId, tab.url);
   } catch (err) {
     // Ignore.
@@ -139,6 +244,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  console.log("Focus Tracker: onUpdated fired", { tabId, changeInfo });
   if (changeInfo.status === "complete" && tab.url) {
     await handleTabUrl(tabId, tab.url);
   } else if (changeInfo.url) {
@@ -155,6 +261,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     lastAcceptableUrl = "";
     try {
       await apiFetch("/session/end", { method: "POST" });
+      await notifySessionComplete();
     } catch (err) {
       console.warn(
         "Focus Tracker: could not reach desktop app to end session.",
@@ -167,8 +274,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
-      const { durationMinutes, lockMode, domainWhitelist, processWhitelist } =
-        message.payload;
+      const { durationMinutes, lockMode, domainWhitelist } = message.payload;
 
       let seedUrl = "";
       try {
@@ -195,14 +301,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             duration_minutes: durationMinutes,
             lock_mode: lockMode,
             domain_whitelist: domainWhitelist,
-            process_whitelist: processWhitelist,
+            process_whitelist: null,
           }),
         });
 
         lastHandledUrlByTab.clear();
         const endTime =
-          normalizeEndTime(data.end_time) ||
-          Date.now() + durationMinutes * 60 * 1000;
+          typeof data.secondsRemaining === "number"
+            ? Date.now() + data.secondsRemaining * 1000
+            : Date.now() + durationMinutes * 60 * 1000;
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
 

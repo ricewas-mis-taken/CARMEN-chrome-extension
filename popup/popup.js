@@ -6,13 +6,21 @@ const customMinutesInput = document.getElementById("custom-minutes");
 const lockSoftBtn = document.getElementById("lock-soft");
 const lockHardBtn = document.getElementById("lock-hard");
 const whitelistTextarea = document.getElementById("whitelist");
-const processWhitelistTextarea = document.getElementById("process-whitelist");
 const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
-const modeBadge = document.getElementById("mode-badge");
-const violationBadge = document.getElementById("violation-badge");
+const lockModeBadgeEl = document.getElementById("lock-mode-badge");
+const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
+
+const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
+
+chrome.storage.local.get(SAVED_WHITELIST_KEY, (data) => {
+  const saved = data[SAVED_WHITELIST_KEY];
+  if (Array.isArray(saved) && saved.length > 0) {
+    whitelistTextarea.value = saved.join("\n");
+  }
+});
 
 let selectedMinutes = null;
 let selectedLockMode = "soft";
@@ -60,7 +68,8 @@ startBtn.addEventListener("click", () => {
       .filter((line) => line.length > 0);
 
   const domainWhitelist = parseLines(whitelistTextarea.value);
-  const processWhitelist = parseLines(processWhitelistTextarea.value);
+
+  chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
   startBtn.disabled = true;
   chrome.runtime.sendMessage(
@@ -70,13 +79,12 @@ startBtn.addEventListener("click", () => {
         durationMinutes,
         lockMode: selectedLockMode,
         domainWhitelist,
-        processWhitelist,
       },
     },
     (response) => {
       startBtn.disabled = false;
       if (response?.ok) {
-        window.close();
+        refreshStatus();
       } else {
         startBtn.textContent = "Desktop app unreachable — try again";
         setTimeout(() => {
@@ -138,10 +146,17 @@ function stopCountdown() {
 
 function renderActiveSession(session) {
   showActiveView();
-  modeBadge.textContent = session.lockMode === "hard" ? "Hard Lock" : "Soft Lock";
-  violationBadge.textContent = `${session.violationCount} violation${
-    session.violationCount === 1 ? "" : "s"
-  }`;
+  const isHard = session.lockMode === "hard";
+  lockModeBadgeEl.textContent = isHard ? "Hard Lock" : "Soft Lock";
+  lockModeBadgeEl.classList.toggle("hard", isHard);
+  lockModeBadgeEl.classList.toggle("soft", !isHard);
+  const sites = session.domainWhitelist || [];
+  allowedSitesEl.innerHTML = "";
+  sites.forEach((site) => {
+    const li = document.createElement("li");
+    li.textContent = site;
+    allowedSitesEl.appendChild(li);
+  });
   startCountdown(session.endTime);
 }
 
