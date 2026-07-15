@@ -132,17 +132,23 @@ function formatDurationSeconds(totalSeconds) {
   return `${remainingSeconds}s`;
 }
 
-// Fires the "session complete" notification for a natural (alarm-based) end.
-// GET /status self-finalizes an expired session on any poll (e.g. the popup's
-// 3s status poll), which resets violationCount/violationLog to zero before
-// our own /session/end call can see them — so read the just-appended entry
-// from GET /history instead, which always has the real numbers regardless of
-// who finalized the session first.
+// Fires the "session complete" notification for an alarm-based or
+// extension-initiated end. GET /status self-finalizes an expired session on
+// any poll (e.g. the popup's 3s status poll), which resets
+// violationCount/violationLog to zero before our own /session/end call can
+// see them — so read the just-appended entry from GET /history instead,
+// which always has the real numbers regardless of who finalized the session
+// first.
 async function notifySessionComplete() {
   try {
     const history = await apiFetch("/history", { method: "GET" });
     const lastEntry = history[history.length - 1];
     if (!lastEntry) return;
+
+    // Entries recorded before the desktop app added end-of-session labeling
+    // won't have endType at all — treat that as a plain manual end.
+    const endType = lastEntry.endType || "manual";
+    const reason = lastEntry.reason;
 
     const violationLog = lastEntry.violationLog || [];
     const domainViolations = violationLog.filter((entry) => entry.kind === "domain");
@@ -158,17 +164,30 @@ async function notifySessionComplete() {
     }, 0);
 
     const count = domainViolations.length;
-    const message =
+    const violationSummary =
       count > 0
         ? `${count} tab violation${count === 1 ? "" : "s"}, ${formatDurationSeconds(
             offTaskSeconds
           )} off-task.`
         : "No tab violations — nice work.";
 
+    let title;
+    let message;
+    if (endType === "nuclear") {
+      title = "Focus session nuked early";
+      message = reason ? `Reason: "${reason}". ${violationSummary}` : violationSummary;
+    } else if (endType === "manual") {
+      title = "Focus session ended early";
+      message = violationSummary;
+    } else {
+      title = "Focus session complete — you're free to go!";
+      message = violationSummary;
+    }
+
     chrome.notifications.create({
       type: "basic",
       iconUrl: chrome.runtime.getURL("icon128.png"),
-      title: "Focus session complete — you're free to go!",
+      title,
       message,
     });
   } catch (err) {
@@ -352,6 +371,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       lastAcceptableUrl = "";
       await chrome.alarms.clear(ALARM_NAME);
       try {
+        // This always records as endType "manual", not "nuclear" — that
+        // label is reserved for the desktop tray's reasoned kill switch.
+        // POST /session/end doesn't accept a body yet, so there's nowhere
+        // to put a reason even if this button prompted for one; revisit
+        // once the desktop API grows end_type/reason support here.
         await apiFetch("/session/end", { method: "POST" });
         await notifySessionComplete();
         sendResponse({ ok: true });
