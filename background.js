@@ -261,6 +261,26 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   }
 });
 
+// onActivated only fires when the *active tab within a window* changes. If
+// the offending tab is the active tab of its window and the user simply
+// refocuses that window (e.g. Alt+Tab back to it) without switching tabs
+// inside it, no tab-activation event fires at all — so hard lock never
+// re-evaluates it and the "switch away" never re-triggers. Catch that case
+// by re-checking whichever tab is active in a window the moment it gains
+// OS focus.
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  console.log("Focus Tracker: onFocusChanged fired", { windowId });
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, windowId });
+    if (!activeTab) return;
+    lastHandledUrlByTab.delete(activeTab.id);
+    await handleTabUrl(activeTab.id, activeTab.url);
+  } catch (err) {
+    // Ignore.
+  }
+});
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   console.log("Focus Tracker: onUpdated fired", { tabId, changeInfo });
   if (changeInfo.status === "complete" && tab.url) {
@@ -374,6 +394,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
         });
+
+        // The domain just became allowed — re-check whichever tab is active
+        // in each window right now, so a hard-lock redirect or soft-lock
+        // overlay from before the add clears immediately instead of waiting
+        // on the next unrelated tab/window event to happen to re-trigger it.
+        try {
+          const activeTabs = await chrome.tabs.query({ active: true });
+          for (const t of activeTabs) {
+            lastHandledUrlByTab.delete(t.id);
+            await handleTabUrl(t.id, t.url);
+          }
+        } catch (err) {
+          // Ignore.
+        }
+
         sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
       } catch (err) {
         console.warn("Focus Tracker: could not add domain to whitelist.", err);
