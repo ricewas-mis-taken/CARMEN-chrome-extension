@@ -10,8 +10,20 @@ const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
 const lockModeBadgeEl = document.getElementById("lock-mode-badge");
+const pausedBadgeEl = document.getElementById("paused-badge");
+const pauseBtn = document.getElementById("pause-btn");
 const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
+const violationsCountEl = document.getElementById("violations-count");
+const viewLogBtn = document.getElementById("view-log-btn");
+
+const addSiteInput = document.getElementById("add-site-input");
+const addSiteBtn = document.getElementById("add-site-btn");
+const addSiteReasonRow = document.getElementById("add-site-reason-row");
+const addSiteReasonInput = document.getElementById("add-site-reason");
+const addSiteCancelBtn = document.getElementById("add-site-cancel-btn");
+const addSiteSubmitBtn = document.getElementById("add-site-submit-btn");
+const addSiteStatusEl = document.getElementById("add-site-status");
 
 const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
 
@@ -52,6 +64,10 @@ function selectLockMode(mode) {
 lockSoftBtn.addEventListener("click", () => selectLockMode("soft"));
 lockHardBtn.addEventListener("click", () => selectLockMode("hard"));
 
+whitelistTextarea.addEventListener("input", () => {
+  whitelistTextarea.style.borderColor = "";
+});
+
 startBtn.addEventListener("click", () => {
   const customValue = Number(customMinutesInput.value);
   const durationMinutes = customValue > 0 ? customValue : selectedMinutes;
@@ -68,6 +84,16 @@ startBtn.addEventListener("click", () => {
       .filter((line) => line.length > 0);
 
   const domainWhitelist = parseLines(whitelistTextarea.value);
+
+  // Hard lock with an empty whitelist has nowhere safe to send you — every
+  // tab looks like a violation and there's no fallback destination, so
+  // enforcement just silently gives up and does nothing at all. Catch that
+  // here instead of letting the session start and appear completely broken.
+  if (selectedLockMode === "hard" && domainWhitelist.length === 0) {
+    whitelistTextarea.style.borderColor = "#e5484d";
+    whitelistTextarea.placeholder = "Add at least one site — hard lock needs somewhere to send you";
+    return;
+  }
 
   chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
@@ -95,6 +121,29 @@ startBtn.addEventListener("click", () => {
   );
 });
 
+pauseBtn.addEventListener("click", () => {
+  const willPause = !pauseBtn.classList.contains("is-paused");
+  pauseBtn.disabled = true;
+  chrome.runtime.sendMessage(
+    { type: willPause ? "pauseSession" : "resumeSession" },
+    (response) => {
+      pauseBtn.disabled = false;
+      if (response?.ok) {
+        refreshStatus();
+      } else {
+        pauseBtn.textContent = "Desktop app unreachable — try again";
+        setTimeout(() => {
+          pauseBtn.textContent = willPause ? "Pause Timer" : "Resume Timer";
+        }, 2500);
+      }
+    }
+  );
+});
+
+viewLogBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("log/log.html") });
+});
+
 nuclearBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "endSession" }, () => {
     stopStatusPoll();
@@ -103,9 +152,66 @@ nuclearBtn.addEventListener("click", () => {
   });
 });
 
+// Adding a site mid-session is a two-step flow: typing a domain and hitting
+// Add only reveals the reason box — nothing is sent to the desktop app until
+// a non-empty reason is submitted, so every addition has an audit trail.
+let pendingAddSiteDomain = null;
+
+function resetAddSiteForm() {
+  pendingAddSiteDomain = null;
+  addSiteReasonRow.classList.add("hidden");
+  addSiteBtn.disabled = false;
+  addSiteInput.disabled = false;
+  addSiteInput.value = "";
+  addSiteReasonInput.value = "";
+}
+
+addSiteBtn.addEventListener("click", () => {
+  const domain = addSiteInput.value.trim();
+  if (!domain) return;
+  pendingAddSiteDomain = domain;
+  addSiteReasonRow.classList.remove("hidden");
+  addSiteBtn.disabled = true;
+  addSiteInput.disabled = true;
+  addSiteReasonInput.value = "";
+  addSiteStatusEl.textContent = "";
+  addSiteReasonInput.focus();
+});
+
+addSiteCancelBtn.addEventListener("click", () => {
+  resetAddSiteForm();
+  addSiteStatusEl.textContent = "";
+});
+
+addSiteSubmitBtn.addEventListener("click", () => {
+  const reason = addSiteReasonInput.value.trim();
+  if (!pendingAddSiteDomain || !reason) {
+    addSiteStatusEl.textContent = "A reason is required.";
+    return;
+  }
+
+  const domain = pendingAddSiteDomain;
+  addSiteSubmitBtn.disabled = true;
+  chrome.runtime.sendMessage(
+    { type: "addWhitelistDomain", payload: { domain, reason } },
+    (response) => {
+      addSiteSubmitBtn.disabled = false;
+      if (response?.ok) {
+        addSiteStatusEl.textContent = `Added ${domain}.`;
+        resetAddSiteForm();
+        refreshStatus();
+      } else {
+        addSiteStatusEl.textContent = "Couldn't add site — desktop app unreachable.";
+      }
+    }
+  );
+});
+
 function showSetupView() {
   activeView.classList.add("hidden");
   setupView.classList.remove("hidden");
+  resetAddSiteForm();
+  addSiteStatusEl.textContent = "";
 }
 
 function showActiveView() {
@@ -157,7 +263,24 @@ function renderActiveSession(session) {
     li.textContent = site;
     allowedSitesEl.appendChild(li);
   });
-  startCountdown(session.endTime);
+
+  const violationCount = session.violationCount || 0;
+  violationsCountEl.textContent = `${violationCount} violation${violationCount === 1 ? "" : "s"}`;
+  violationsCountEl.classList.toggle("has-violations", violationCount > 0);
+
+  pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
+  pauseBtn.classList.toggle("is-paused", !!session.isPaused);
+  pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
+
+  // While paused the desktop app freezes secondsRemaining, so stop ticking
+  // locally too — otherwise the displayed countdown would drift down between
+  // 3s status polls even though the real session clock isn't moving.
+  if (session.isPaused) {
+    stopCountdown();
+    countdownEl.textContent = formatCountdown(session.endTime - Date.now());
+  } else {
+    startCountdown(session.endTime);
+  }
 }
 
 function stopStatusPoll() {
