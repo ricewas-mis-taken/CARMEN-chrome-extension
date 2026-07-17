@@ -204,6 +204,34 @@ function formatDurationSeconds(totalSeconds) {
   return `${remainingSeconds}s`;
 }
 
+// Service workers have no Audio()/Web Audio API, so a completion chime has
+// to be played from an offscreen document instead — the only extension
+// context that has a DOM at all. chrome.offscreen only allows one document
+// to exist at a time, so treat "already exists" as success rather than an
+// error.
+async function ensureOffscreenDocument() {
+  try {
+    await chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Play a completion chime when a focus session ends.",
+    });
+  } catch (err) {
+    if (!/single offscreen document/i.test(err?.message || "")) {
+      throw err;
+    }
+  }
+}
+
+async function playCompletionSound() {
+  try {
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({ type: "playCompletionSound" });
+  } catch (err) {
+    console.warn("Focus Tracker: could not play completion sound.", err);
+  }
+}
+
 // Fires the "session complete" notification for a natural (alarm-based) end.
 // GET /status self-finalizes an expired session on any poll (e.g. the popup's
 // 3s status poll), which resets violationCount/violationLog to zero before
@@ -242,7 +270,9 @@ async function notifySessionComplete() {
       iconUrl: chrome.runtime.getURL("icon128.png"),
       title: "Focus session complete — you're free to go!",
       message,
+      silent: false,
     });
+    await playCompletionSound();
   } catch (err) {
     console.warn("Focus Tracker: could not build session-complete notification.", err);
   }
@@ -584,7 +614,7 @@ chrome.tabs.onAttached.addListener((tabId) => {
   recheckIfActive(tabId);
 });
 
-function notifyLocalSessionComplete(session) {
+async function notifyLocalSessionComplete(session) {
   const count = session.violationCount || 0;
   const message =
     count > 0
@@ -595,7 +625,9 @@ function notifyLocalSessionComplete(session) {
     iconUrl: chrome.runtime.getURL("icon128.png"),
     title: "Focus session complete — you're free to go!",
     message,
+    silent: false,
   });
+  await playCompletionSound();
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -604,7 +636,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const local = await getLocalSession();
     if (local.isActive) {
       await setLocalSession(defaultLocalSession());
-      notifyLocalSessionComplete(local);
+      await notifyLocalSessionComplete(local);
       return;
     }
     try {
