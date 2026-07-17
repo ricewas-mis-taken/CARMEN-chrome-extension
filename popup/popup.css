@@ -239,6 +239,27 @@ textarea#whitelist:focus {
   white-space: nowrap;
 }
 
+.browser-only-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -8px 0 16px;
+  font-size: 11px;
+  color: #a86a00;
+  text-align: center;
+}
+
+.browser-only-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.primary-btn.confirm-browser-only {
+  background: linear-gradient(135deg, #e5a13a, #c9821c);
+  box-shadow: 0 6px 16px rgba(201, 130, 28, 0.35);
+}
+
 .pause-btn {
   width: 100%;
   margin-bottom: 18px;
