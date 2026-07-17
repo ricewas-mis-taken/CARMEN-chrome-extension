@@ -217,6 +217,28 @@ textarea#whitelist:focus {
   color: #a86a00;
 }
 
+.event-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -8px 0 16px;
+  font-size: 11px;
+  color: #7b8794;
+}
+
+.event-source-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.event-source-title {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pause-btn {
   width: 100%;
   margin-bottom: 18px;

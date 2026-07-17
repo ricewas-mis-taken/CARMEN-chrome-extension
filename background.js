@@ -19,6 +19,9 @@ function defaultSession() {
     lastAcceptableUrl: "",
     violationCount: 0,
     violationLog: [],
+    source: "manual",
+    eventId: null,
+    eventTitle: null,
   };
 }
 
@@ -47,6 +50,15 @@ async function getSession() {
       violationCount: data.violationCount || 0,
       violationLog: data.violationLog || [],
       lastAcceptableUrl,
+      // "manual" (popup-started, using the saved whitelist) or
+      // "calendar-event" (a temporary per-session override from the desktop
+      // API). Purely descriptive — enforcement below still just reads
+      // domainWhitelist/lockMode the same way regardless of source; this is
+      // only surfaced so the popup can show why the active whitelist isn't
+      // the user's manually saved one.
+      source: data.source || "manual",
+      eventId: data.eventId || null,
+      eventTitle: data.eventTitle || null,
     };
   } catch (err) {
     console.warn(
@@ -496,7 +508,23 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
-      const { durationMinutes, lockMode, domainWhitelist } = message.payload;
+      const {
+        durationMinutes,
+        lockMode,
+        domainWhitelist,
+        // Optional — a future calendar-integration caller (e.g. a companion
+        // content script) can pass these to tag the session the same way
+        // the desktop API's /session/start does directly. Not written to
+        // chrome.storage.local's SAVED_WHITELIST_KEY below regardless of
+        // source: that key is the user's manually pre-filled whitelist, and
+        // an event-sourced whitelist is a temporary override that must
+        // never overwrite it. Manual sessions from the popup already skip
+        // this since popup.js writes that key itself before sending this
+        // message.
+        source = "manual",
+        eventId = null,
+        eventTitle = null,
+      } = message.payload;
 
       let seedUrl = "";
       try {
@@ -524,6 +552,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             lock_mode: lockMode,
             domain_whitelist: domainWhitelist,
             process_whitelist: null,
+            source,
+            event_id: eventId,
+            event_title: eventTitle,
           }),
         });
 

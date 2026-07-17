@@ -16,6 +16,8 @@ const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
 const violationsCountEl = document.getElementById("violations-count");
 const viewLogBtn = document.getElementById("view-log-btn");
+const eventSourceRowEl = document.getElementById("event-source-row");
+const eventSourceTitleEl = document.getElementById("event-source-title");
 
 const addSiteInput = document.getElementById("add-site-input");
 const addSiteBtn = document.getElementById("add-site-btn");
@@ -95,6 +97,11 @@ startBtn.addEventListener("click", () => {
     return;
   }
 
+  // This is the user's manually pre-filled whitelist — only the manual
+  // start flow writes it. A calendar-event session's whitelist is a
+  // temporary per-session override (set directly via the desktop API, not
+  // through this popup) and must never land here, or the next manual
+  // session would silently start with someone else's event's sites.
   chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
   startBtn.disabled = true;
@@ -271,6 +278,16 @@ function renderActiveSession(session) {
   pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
   pauseBtn.classList.toggle("is-paused", !!session.isPaused);
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
+
+  // Calendar-event sessions run on a whitelist scoped to that event, not
+  // the whitelist saved in this popup's textarea — flag that here so the
+  // "Allowed sites" list not matching what the user manually typed in
+  // doesn't read as a bug.
+  const isEventSourced = session.source === "calendar-event";
+  eventSourceRowEl.classList.toggle("hidden", !isEventSourced);
+  eventSourceTitleEl.textContent = isEventSourced
+    ? session.eventTitle || "Calendar event"
+    : "";
 
   // While paused the desktop app freezes secondsRemaining, so stop ticking
   // locally too — otherwise the displayed countdown would drift down between
