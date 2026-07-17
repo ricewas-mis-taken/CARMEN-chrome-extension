@@ -1,9 +1,11 @@
 // Focus Tracker background service worker (MV3)
 //
 // Session state (active/inactive, lock mode, duration, whitelists, violation
-// count) lives in the desktop app, not chrome.storage.local. This service
-// worker only keeps `lastAcceptableUrl` in memory, since it's a per-tab-check
-// bookkeeping detail the desktop API has no endpoint to store.
+// count) lives in the desktop app, not chrome.storage.local — except for
+// browser-only sessions (see LOCAL_SESSION_KEY below), which run without a
+// desktop app at all and so need somewhere durable of their own to live.
+// This service worker only keeps `lastAcceptableUrl` in memory, since it's a
+// per-tab-check bookkeeping detail neither store needs to persist.
 
 const API_BASE = "http://127.0.0.1:5847";
 const ALARM_NAME = "focusSessionEnd";
@@ -35,6 +37,33 @@ async function apiFetch(path, options) {
   return res.json();
 }
 
+// Fallback session store for when the desktop app is unreachable. Unlike the
+// desktop-backed session (server-side state, polled via /status), this has
+// to survive service-worker restarts on its own, so it lives in
+// chrome.storage.local rather than an in-memory variable.
+const LOCAL_SESSION_KEY = "browserOnlySession";
+
+function defaultLocalSession() {
+  return {
+    isActive: false,
+    isPaused: false,
+    endTime: 0,
+    pausedRemainingMs: 0,
+    lockMode: "soft",
+    domainWhitelist: [],
+    violationCount: 0,
+  };
+}
+
+async function getLocalSession() {
+  const data = await chrome.storage.local.get(LOCAL_SESSION_KEY);
+  return { ...defaultLocalSession(), ...(data[LOCAL_SESSION_KEY] || {}) };
+}
+
+async function setLocalSession(session) {
+  await chrome.storage.local.set({ [LOCAL_SESSION_KEY]: session });
+}
+
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
@@ -59,15 +88,34 @@ async function getSession() {
       source: data.source || "manual",
       eventId: data.eventId || null,
       eventTitle: data.eventTitle || null,
+      desktopReachable: true,
     };
   } catch (err) {
     console.warn(
       "Focus Tracker: could not reach desktop app at",
       API_BASE,
-      "- treating session as inactive.",
+      "- checking for a browser-only session instead.",
       err
     );
-    return defaultSession();
+    const local = await getLocalSession();
+    if (!local.isActive) {
+      return { ...defaultSession(), desktopReachable: false };
+    }
+    return {
+      isActive: true,
+      isPaused: local.isPaused,
+      endTime: local.endTime,
+      lockMode: local.lockMode,
+      domainWhitelist: local.domainWhitelist,
+      processWhitelist: [],
+      violationCount: local.violationCount,
+      violationLog: [],
+      lastAcceptableUrl,
+      source: "browser-only",
+      eventId: null,
+      eventTitle: null,
+      desktopReachable: false,
+    };
   }
 }
 
@@ -239,6 +287,9 @@ async function handleTabUrl(tabId, url) {
 
   if (whitelisted) {
     lastAcceptableUrl = url;
+    // Browser-only sessions have no desktop app to tell — violation state
+    // lives entirely in local storage for that mode.
+    if (session.source === "browser-only") return;
     // The desktop app can't observe tab changes itself, so tell it whenever
     // the active tab goes from off-whitelist to on-whitelist, in case a
     // domain violation was open and needs to be resolved.
@@ -258,15 +309,23 @@ async function handleTabUrl(tabId, url) {
   }
 
   // Violation counting is owned by the desktop app; report it so /status's
-  // violation_count reflects what actually happened in the browser.
-  try {
-    await apiFetch("/violation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-  } catch (err) {
-    console.warn("Focus Tracker: could not report violation to desktop app.", err);
+  // violation_count reflects what actually happened in the browser. Browser-
+  // only sessions have no desktop app to report to, so count locally instead.
+  if (session.source === "browser-only") {
+    const local = await getLocalSession();
+    if (local.isActive) {
+      await setLocalSession({ ...local, violationCount: (local.violationCount || 0) + 1 });
+    }
+  } else {
+    try {
+      await apiFetch("/violation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+    } catch (err) {
+      console.warn("Focus Tracker: could not report violation to desktop app.", err);
+    }
   }
 
   // onUpdated fires for every tab regardless of whether it's the one the
@@ -490,9 +549,29 @@ chrome.tabs.onAttached.addListener((tabId) => {
   recheckIfActive(tabId);
 });
 
+function notifyLocalSessionComplete(session) {
+  const count = session.violationCount || 0;
+  const message =
+    count > 0
+      ? `${count} tab violation${count === 1 ? "" : "s"} (browser-only session — no desktop sync).`
+      : "No tab violations — nice work. (browser-only session)";
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icon128.png"),
+    title: "Focus session complete — you're free to go!",
+    message,
+  });
+}
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
     lastAcceptableUrl = "";
+    const local = await getLocalSession();
+    if (local.isActive) {
+      await setLocalSession(defaultLocalSession());
+      notifyLocalSessionComplete(local);
+      return;
+    }
     try {
       await apiFetch("/session/end", { method: "POST" });
       await notifySessionComplete();
@@ -524,6 +603,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source = "manual",
         eventId = null,
         eventTitle = null,
+        // Set only after the popup has explicitly confirmed (its own
+        // double-click-to-confirm flow) that it's OK to start a session
+        // entirely in the browser if the desktop app turns out to be
+        // unreachable. Without this confirmation a failed desktop call is
+        // just reported back as a plain failure, same as before.
+        browserOnly = false,
       } = message.payload;
 
       let seedUrl = "";
@@ -577,7 +662,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           "Focus Tracker: could not reach desktop app to start session.",
           err
         );
-        sendResponse({ ok: false, error: String(err) });
+
+        if (!browserOnly) {
+          sendResponse({ ok: false, error: String(err), desktopUnreachable: true });
+          return;
+        }
+
+        // Confirmed fallback: run the session entirely in the browser, with
+        // no desktop app to enforce it, log violations, or survive if the
+        // browser closes. State lives in chrome.storage.local instead of
+        // the desktop app's /status.
+        const endTime = Date.now() + durationMinutes * 60 * 1000;
+        await setLocalSession({
+          isActive: true,
+          isPaused: false,
+          endTime,
+          pausedRemainingMs: 0,
+          lockMode,
+          domainWhitelist,
+          violationCount: 0,
+        });
+        lastHandledUrlByTab.clear();
+        await chrome.alarms.clear(ALARM_NAME);
+        chrome.alarms.create(ALARM_NAME, { when: endTime });
+        await recheckAllActiveTabs();
+        sendResponse({ ok: true, mode: "browser-only" });
       }
     })();
     return true;
@@ -587,6 +696,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       lastAcceptableUrl = "";
       await chrome.alarms.clear(ALARM_NAME);
+
+      const local = await getLocalSession();
+      if (local.isActive) {
+        await setLocalSession(defaultLocalSession());
+        sendResponse({ ok: true });
+        return;
+      }
+
       try {
         await apiFetch("/session/end", { method: "POST" });
         await notifySessionComplete();
@@ -604,6 +721,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "pauseSession") {
     (async () => {
+      const local = await getLocalSession();
+      if (local.isActive) {
+        const remainingMs = Math.max(0, local.endTime - Date.now());
+        await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs });
+        await chrome.alarms.clear(ALARM_NAME);
+        sendResponse({ ok: true });
+        return;
+      }
+
       try {
         // Lock enforcement stays on while paused — only the countdown
         // freezes. Only clear the end-of-session alarm AFTER the desktop
@@ -624,6 +750,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "resumeSession") {
     (async () => {
+      const local = await getLocalSession();
+      if (local.isActive) {
+        const endTime = Date.now() + local.pausedRemainingMs;
+        await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0 });
+        chrome.alarms.create(ALARM_NAME, { when: endTime });
+        sendResponse({ ok: true });
+        return;
+      }
+
       try {
         const data = await apiFetch("/session/resume", { method: "POST" });
         const endTime =
@@ -649,6 +784,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: "domain and reason are both required" });
         return;
       }
+
+      const local = await getLocalSession();
+      if (local.isActive) {
+        const updated = [...local.domainWhitelist, domain.trim()];
+        await setLocalSession({ ...local, domainWhitelist: updated });
+        await recheckAllActiveTabs();
+        sendResponse({ ok: true, domainWhitelist: updated });
+        return;
+      }
+
       try {
         const data = await apiFetch("/whitelist/domains/add", {
           method: "POST",

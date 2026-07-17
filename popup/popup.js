@@ -18,6 +18,7 @@ const violationsCountEl = document.getElementById("violations-count");
 const viewLogBtn = document.getElementById("view-log-btn");
 const eventSourceRowEl = document.getElementById("event-source-row");
 const eventSourceTitleEl = document.getElementById("event-source-title");
+const browserOnlyRowEl = document.getElementById("browser-only-row");
 
 const addSiteInput = document.getElementById("add-site-input");
 const addSiteBtn = document.getElementById("add-site-btn");
@@ -70,6 +71,32 @@ whitelistTextarea.addEventListener("input", () => {
   whitelistTextarea.style.borderColor = "";
 });
 
+// If the desktop app is unreachable, a single click doesn't silently start a
+// degraded, unsynced session — the button arms into a "confirm" state and
+// the user has to click it again to actually start browser-only. Requiring
+// that second, explicit click is the whole point: it's an intentional
+// choice, not something that happens by default just because the desktop
+// app happened to be closed.
+let awaitingBrowserOnlyConfirm = false;
+let browserOnlyArmTimeout = null;
+const BROWSER_ONLY_ARM_WINDOW_MS = 5000;
+
+function disarmBrowserOnlyConfirm() {
+  awaitingBrowserOnlyConfirm = false;
+  clearTimeout(browserOnlyArmTimeout);
+  browserOnlyArmTimeout = null;
+  startBtn.classList.remove("confirm-browser-only");
+  startBtn.textContent = "Start Focus Session";
+}
+
+function armBrowserOnlyConfirm() {
+  awaitingBrowserOnlyConfirm = true;
+  startBtn.classList.add("confirm-browser-only");
+  startBtn.textContent = "Desktop unreachable — click again for browser-only";
+  clearTimeout(browserOnlyArmTimeout);
+  browserOnlyArmTimeout = setTimeout(disarmBrowserOnlyConfirm, BROWSER_ONLY_ARM_WINDOW_MS);
+}
+
 startBtn.addEventListener("click", () => {
   const customValue = Number(customMinutesInput.value);
   const durationMinutes = customValue > 0 ? customValue : selectedMinutes;
@@ -104,6 +131,8 @@ startBtn.addEventListener("click", () => {
   // session would silently start with someone else's event's sites.
   chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
+  const browserOnly = awaitingBrowserOnlyConfirm;
+
   startBtn.disabled = true;
   chrome.runtime.sendMessage(
     {
@@ -112,13 +141,18 @@ startBtn.addEventListener("click", () => {
         durationMinutes,
         lockMode: selectedLockMode,
         domainWhitelist,
+        browserOnly,
       },
     },
     (response) => {
       startBtn.disabled = false;
       if (response?.ok) {
+        disarmBrowserOnlyConfirm();
         refreshStatus();
+      } else if (response?.desktopUnreachable && !browserOnly) {
+        armBrowserOnlyConfirm();
       } else {
+        disarmBrowserOnlyConfirm();
         startBtn.textContent = "Desktop app unreachable — try again";
         setTimeout(() => {
           startBtn.textContent = "Start Focus Session";
@@ -219,6 +253,7 @@ function showSetupView() {
   setupView.classList.remove("hidden");
   resetAddSiteForm();
   addSiteStatusEl.textContent = "";
+  disarmBrowserOnlyConfirm();
 }
 
 function showActiveView() {
@@ -288,6 +323,8 @@ function renderActiveSession(session) {
   eventSourceTitleEl.textContent = isEventSourced
     ? session.eventTitle || "Calendar event"
     : "";
+
+  browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
   // While paused the desktop app freezes secondsRemaining, so stop ticking
   // locally too — otherwise the displayed countdown would drift down between
