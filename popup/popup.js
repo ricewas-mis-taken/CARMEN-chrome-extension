@@ -64,6 +64,10 @@ function selectLockMode(mode) {
 lockSoftBtn.addEventListener("click", () => selectLockMode("soft"));
 lockHardBtn.addEventListener("click", () => selectLockMode("hard"));
 
+whitelistTextarea.addEventListener("input", () => {
+  whitelistTextarea.style.borderColor = "";
+});
+
 startBtn.addEventListener("click", () => {
   const customValue = Number(customMinutesInput.value);
   const durationMinutes = customValue > 0 ? customValue : selectedMinutes;
@@ -80,6 +84,16 @@ startBtn.addEventListener("click", () => {
       .filter((line) => line.length > 0);
 
   const domainWhitelist = parseLines(whitelistTextarea.value);
+
+  // Hard lock with an empty whitelist has nowhere safe to send you — every
+  // tab looks like a violation and there's no fallback destination, so
+  // enforcement just silently gives up and does nothing at all. Catch that
+  // here instead of letting the session start and appear completely broken.
+  if (selectedLockMode === "hard" && domainWhitelist.length === 0) {
+    whitelistTextarea.style.borderColor = "#e5484d";
+    whitelistTextarea.placeholder = "Add at least one site — hard lock needs somewhere to send you";
+    return;
+  }
 
   chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 

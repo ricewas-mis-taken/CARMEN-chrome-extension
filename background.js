@@ -76,13 +76,40 @@ async function withDragRetry(fn, attempts = 10, delayMs = 200) {
   }
 }
 
+// A whitelist entry is either a bare domain ("docs.google.com") or a
+// domain-plus-path substring ("docs.google.com/document/d/xyz") — the
+// popup's own hint text says "one domain or URL substring per line", so
+// path-scoped entries have to keep working. But matching that substring
+// against the *entire* URL (as this used to) is a self-defeating check for
+// a self-imposed lock: any restricted page can "become whitelisted" just by
+// having the string appear in its query string or hash, e.g.
+// "https://reddit.com/?ref=docs.google.com", and a bare-domain entry like
+// "github.com" would also match unrelated hosts like "evilgithub.com" or
+// "github.com.evil.com" since those literally contain the substring. Bare
+// domains are matched against the hostname only (exact or subdomain);
+// path-scoped entries are matched against origin+pathname, which excludes
+// the attacker/self-controllable query string and hash.
 function isWhitelisted(url, whitelist) {
   if (!url) return true;
   if (!whitelist || whitelist.length === 0) return false;
-  const lowerUrl = url.toLowerCase();
+
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    return false;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const originAndPath = (parsed.origin + parsed.pathname).toLowerCase();
+
   return whitelist.some((entry) => {
     const trimmed = (entry || "").trim().toLowerCase();
-    return trimmed.length > 0 && lowerUrl.includes(trimmed);
+    if (!trimmed) return false;
+    const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
+    if (!withoutProtocol.includes("/")) {
+      return hostname === withoutProtocol || hostname.endsWith(`.${withoutProtocol}`);
+    }
+    return originAndPath.includes(withoutProtocol);
   });
 }
 
@@ -230,6 +257,23 @@ async function handleTabUrl(tabId, url) {
     console.warn("Focus Tracker: could not report violation to desktop app.", err);
   }
 
+  // onUpdated fires for every tab regardless of whether it's the one the
+  // user is actually looking at — e.g. middle-clicking a search result opens
+  // a background tab, or a background tab auto-refreshes. Without this
+  // check, that background navigation would still trigger hard lock's
+  // switch-away/close (stealing focus from whatever the user IS legitimately
+  // doing) or inject the soft-lock overlay into a tab nobody's viewing. Only
+  // enforce on the tab that's actually active; if a restricted background
+  // tab later gets clicked into, onActivated re-evaluates it fresh at that
+  // point anyway.
+  let currentTab;
+  try {
+    currentTab = await chrome.tabs.get(tabId);
+  } catch (err) {
+    return;
+  }
+  if (!currentTab.active) return;
+
   if (session.lockMode === "hard") {
     // Normal case: don't touch the offending tab itself — leave its URL
     // alone and just switch focus away from it, so it's still open but not
@@ -243,7 +287,6 @@ async function handleTabUrl(tabId, url) {
     const isDragLockError = (err) => /may be dragging a tab/i.test(err?.message || "");
 
     try {
-      const currentTab = await chrome.tabs.get(tabId);
       const tabs = await chrome.tabs.query({});
       const isCandidate = (t) =>
         t.id !== tabId &&
@@ -327,6 +370,23 @@ async function handleTabUrl(tabId, url) {
   }
 }
 
+// Whatever just changed (session started, a domain got whitelisted
+// mid-session) makes whichever tab is currently active in each window
+// possibly-stale — it may have been evaluated under the old rules. Re-check
+// it immediately instead of waiting for some unrelated tab/window event to
+// happen to trigger a re-evaluation.
+async function recheckAllActiveTabs() {
+  try {
+    const activeTabs = await chrome.tabs.query({ active: true });
+    for (const t of activeTabs) {
+      lastHandledUrlByTab.delete(t.id);
+      await handleTabUrl(t.id, t.url);
+    }
+  } catch (err) {
+    // Ignore.
+  }
+}
+
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   console.log("Focus Tracker: onActivated fired", { tabId, windowId });
   try {
@@ -384,6 +444,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  activeTabByWindow.delete(windowId);
 });
 
 // Dragging a tab (reordering it, or tearing it into its own window) doesn't
@@ -471,6 +535,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
 
+        // Enforce immediately if the user was already sitting on a
+        // restricted tab when the session started — otherwise nothing
+        // re-checks it until they happen to switch tabs or navigate.
+        await recheckAllActiveTabs();
+
         sendResponse({ ok: true });
       } catch (err) {
         console.warn(
@@ -506,10 +575,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         // Lock enforcement stays on while paused — only the countdown
-        // freezes — so just stop the end-of-session alarm from firing
-        // early; handleTabUrl's checks are untouched.
-        await chrome.alarms.clear(ALARM_NAME);
+        // freezes. Only clear the end-of-session alarm AFTER the desktop
+        // app confirms the pause — clearing it first and then having the
+        // API call fail would leave the session running server-side with
+        // no local alarm left to catch its natural end, so it'd never
+        // finalize or fire the completion notification.
         await apiFetch("/session/pause", { method: "POST" });
+        await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
       } catch (err) {
         console.warn("Focus Tracker: could not reach desktop app to pause session.", err);
@@ -552,6 +624,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
         });
+
+        // The domain just became allowed — clear a hard-lock switch-away or
+        // soft-lock overlay from before the add immediately, instead of
+        // waiting on some unrelated tab/window event to happen to re-check it.
+        await recheckAllActiveTabs();
+
         sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
       } catch (err) {
         console.warn("Focus Tracker: could not add domain to whitelist.", err);
