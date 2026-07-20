@@ -33,7 +33,17 @@ const reviewAdditionsBtn = document.getElementById("review-additions-btn");
 const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 
-chrome.storage.local.get(SAVED_WHITELIST_KEY, (data) => {
+const parseLines = (value) =>
+  value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+// Awaited by the "Add sites from last session" handler below so it never
+// flushes the textarea to storage before this initial load has actually
+// populated it — that race would flush an empty parse and wipe the saved
+// whitelist instead of preserving it.
+const whitelistLoaded = chrome.storage.local.get(SAVED_WHITELIST_KEY).then((data) => {
   const saved = data[SAVED_WHITELIST_KEY];
   if (Array.isArray(saved) && saved.length > 0) {
     whitelistTextarea.value = saved.join("\n");
@@ -67,7 +77,17 @@ async function refreshReviewAdditionsButton() {
   reviewAdditionsBtn.classList.remove("hidden");
 }
 
-reviewAdditionsBtn.addEventListener("click", () => {
+// Opening additions.html steals focus, which closes this popup before any
+// pending edit reaches storage — the Websites textarea otherwise only saves
+// on "Start Focus Session" (see comment on that flow below). Without
+// flushing here, unsaved edits sitting in the textarea are silently
+// dropped, and then additions.js's merge (which reads/writes
+// SAVED_WHITELIST_KEY directly against whatever's already in storage)
+// permanently overwrites storage without them — looking like "Add sites
+// from last session" deleted the user's existing whitelist entries.
+reviewAdditionsBtn.addEventListener("click", async () => {
+  await whitelistLoaded;
+  await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: parseLines(whitelistTextarea.value) });
   chrome.tabs.create({ url: chrome.runtime.getURL("additions/additions.html") });
 });
 
@@ -141,12 +161,6 @@ startBtn.addEventListener("click", async () => {
     customMinutesInput.style.borderColor = "#e5484d";
     return;
   }
-
-  const parseLines = (value) =>
-    value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
 
   const domainWhitelist = parseLines(whitelistTextarea.value);
 
