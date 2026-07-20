@@ -17,6 +17,7 @@ const nuclearBtn = document.getElementById("nuclear-btn");
 const violationsCountEl = document.getElementById("violations-count");
 const viewLogBtn = document.getElementById("view-log-btn");
 const eventSourceRowEl = document.getElementById("event-source-row");
+const eventSourceIconEl = document.getElementById("event-source-icon");
 const eventSourceTitleEl = document.getElementById("event-source-title");
 const browserOnlyRowEl = document.getElementById("browser-only-row");
 
@@ -358,14 +359,16 @@ function renderActiveSession(session) {
   pauseBtn.classList.toggle("is-paused", !!session.isPaused);
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
 
-  // Calendar-event sessions run on a whitelist scoped to that event, not
-  // the whitelist saved in this popup's textarea — flag that here so the
-  // "Allowed sites" list not matching what the user manually typed in
-  // doesn't read as a bug.
-  const isEventSourced = session.source === "calendar-event";
+  // Calendar-event and task sessions run on a whitelist scoped to that
+  // event/task, not the whitelist saved in this popup's textarea — flag
+  // that here so the "Allowed sites" list not matching what the user
+  // manually typed in doesn't read as a bug.
+  const isTaskSourced = session.source === "task";
+  const isEventSourced = session.source === "calendar-event" || isTaskSourced;
   eventSourceRowEl.classList.toggle("hidden", !isEventSourced);
+  eventSourceIconEl.textContent = isTaskSourced ? "🔁" : "📅";
   eventSourceTitleEl.textContent = isEventSourced
-    ? session.eventTitle || "Calendar event"
+    ? session.eventTitle || (isTaskSourced ? "Task" : "Calendar event")
     : "";
 
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");

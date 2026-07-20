@@ -115,9 +115,9 @@ async function getSession() {
       violationCount: data.violationCount || 0,
       violationLog: data.violationLog || [],
       lastAcceptableUrl,
-      // "manual" (popup-started, using the saved whitelist) or
-      // "calendar-event" (a temporary per-session override from the desktop
-      // API). Purely descriptive — enforcement below still just reads
+      // "manual" (popup-started, using the saved whitelist), "calendar-event",
+      // or "task" — all temporary per-session overrides from the desktop
+      // API. Purely descriptive — enforcement below still just reads
       // domainWhitelist/lockMode the same way regardless of source; this is
       // only surfaced so the popup can show why the active whitelist isn't
       // the user's manually saved one.
