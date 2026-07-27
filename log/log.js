@@ -3,6 +3,20 @@ const currentSummary = document.getElementById("current-summary");
 const currentLogBody = document.getElementById("current-log-body");
 const historyContainer = document.getElementById("history-container");
 
+// entry.url and entry.lockMode ultimately trace back to a page the user
+// navigated to (URL) or the desktop app's response — neither is trusted
+// input, so they can't go into innerHTML unescaped without opening an XSS
+// hole (e.g. a URL containing "<img src=x onerror=...>" via pushState).
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch]));
+}
+
 function formatTimestamp(value) {
   if (!value) return "—";
   const d = new Date(value);
@@ -39,10 +53,17 @@ function renderLogRows(tbody, violationLog) {
     const tr = document.createElement("tr");
     const label =
       entry.kind === "pause" || entry.kind === "resume" ? "—" : entry.lockMode || "—";
+    const urlCell = entry.url
+      ? escapeHtml(entry.url)
+      : entry.kind === "pause"
+      ? "Timer paused"
+      : entry.kind === "resume"
+      ? "Timer resumed"
+      : "—";
     tr.innerHTML = `
       <td>${formatTimestamp(entry.timestamp)}</td>
-      <td class="url-cell">${entry.url ? entry.url : entry.kind === "pause" ? "Timer paused" : entry.kind === "resume" ? "Timer resumed" : "—"}</td>
-      <td>${label}</td>
+      <td class="url-cell">${urlCell}</td>
+      <td>${escapeHtml(label)}</td>
       <td>${formatDuration(entry.durationSeconds)}</td>
       <td>${statusPill(entry)}</td>
     `;
