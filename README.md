@@ -9,7 +9,8 @@ A Chrome (MV3) extension that runs timed focus sessions and flags or blocks off-
 - **Domain whitelist** with substring/path matching, hostname-safe matching (no query-string spoofing), and built-in equivalents (e.g. `gmail.com` ↔ `mail.google.com`).
 - **Mid-session "Add a site"** flow that requires a reason, logged for later review and optional promotion into your saved whitelist.
 - **Violation log** (current session + history) with duration, status, and lock mode.
-- **Desktop app sync** (`127.0.0.1:5847`) for session state and calendar-event–sourced sessions, with a **browser-only fallback** (local `chrome.storage`) when the desktop app is unreachable.
+- **Desktop app sync** syncs with CARMEN desktop, the WIP desktop version of the CARMEN extension. Diagnostics, violations, times, all sent to CARMEN desktop. You can use the extension without the desktop version.
+- **Log** - logs your violations, pauses, nuclear closes, etc., all logged and openable.
 
 ## Layout
 
@@ -18,5 +19,3 @@ A Chrome (MV3) extension that runs timed focus sessions and flags or blocks off-
 - `content/overlay.js` — injected soft-lock overlay / hard-lock blackout.
 - `log/` — violation log viewer.
 - `additions/` — review/promote sites added mid-session.
-- `offscreen.js` / `offscreen.html` — plays the completion chime (service workers can't use Audio directly).
-
