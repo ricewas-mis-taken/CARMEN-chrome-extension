@@ -100,6 +100,18 @@ async function recordSessionAddition(domain, reason) {
   });
 }
 
+// Must go through the same lock recordSessionAddition uses. A plain direct
+// set() here can lose to a still-in-flight addition from the session that's
+// just ending: that add reads its starting array before this reset runs,
+// then writes it back (with its own entry appended) after the reset already
+// landed, silently resurrecting the old session's addition into the new
+// one. Left unfixed, that can stack up across more than one past session.
+async function resetSessionAdditions() {
+  return withStorageLock(async () => {
+    await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
+  });
+}
+
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
@@ -409,6 +421,16 @@ const activeTabByWindow = new Map();
 // whitelisted URL (paired with /violation/resolved) or closes.
 const openViolationTabs = new Set();
 
+// Counts consecutive hard-lock switch-aways for a given tab — i.e. how many
+// times in a row the user has brought this same violating tab back into
+// focus (clicked/alt-tabbed back into it, tried to bring it forward) only
+// for hard lock to switch focus away again. Reset when the tab reaches a
+// whitelisted URL or closes. If someone keeps forcing their way back past
+// the switch-away instead of it settling, closing the tab outright is more
+// effective than an infinite tug-of-war over focus.
+const switchAwayAttemptsByTab = new Map();
+const MAX_SWITCH_AWAY_ATTEMPTS = 3;
+
 function getHostname(url) {
   try {
     return new URL(url).hostname;
@@ -436,6 +458,7 @@ async function handleTabUrl(tabId, url) {
 
   if (whitelisted) {
     lastAcceptableUrl = url;
+    switchAwayAttemptsByTab.delete(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     // Browser-only sessions have no desktop app to tell — violation state
     // lives entirely in local storage for that mode.
@@ -538,6 +561,23 @@ async function handleTabUrl(tabId, url) {
           : null,
       });
 
+      // switchAwayAttemptsByTab only advances once a switch-away actually
+      // completes (below), so it counts genuine "sent away, then brought
+      // back into focus" cycles — not the flurry of onMoved re-checks a
+      // single ordinary drag can fire, which mostly fail the drag-lock
+      // retries above rather than completing. If someone keeps forcing
+      // their way back past enough completed switch-aways, stop fighting
+      // over focus and just close the tab.
+      if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
+        console.log(
+          "Focus Tracker: tab kept getting brought back after switch-away, closing it",
+          { tabId }
+        );
+        switchAwayAttemptsByTab.delete(tabId);
+        await forceCloseTab(tabId);
+        return;
+      }
+
       const switchAway = async () => {
         if (regulatedTab) {
           await chrome.tabs.update(regulatedTab.id, { active: true });
@@ -547,6 +587,13 @@ async function handleTabUrl(tabId, url) {
               focused: true,
               ...(win.state === "minimized" ? { state: "normal" } : {}),
             });
+            // The violating tab's own window is a separate OS window here
+            // (e.g. two windows snapped side-by-side) — focusing the other
+            // window doesn't hide this one, it just stops being the focused
+            // window while staying fully visible (and still scrollable)
+            // right next to it. Minimize it so switching away actually
+            // removes it from view instead of leaving it on screen.
+            await chrome.windows.update(currentTab.windowId, { state: "minimized" });
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
@@ -609,6 +656,7 @@ async function handleTabUrl(tabId, url) {
           try {
             await switchAway();
             consecutiveFailures = 0;
+            switchAwayAttemptsByTab.set(tabId, (switchAwayAttemptsByTab.get(tabId) || 0) + 1);
             await clearBlackout();
           } catch (err) {
             if (isDragLockError(err)) {
@@ -730,6 +778,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
   openViolationTabs.delete(tabId);
+  switchAwayAttemptsByTab.delete(tabId);
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
@@ -869,7 +918,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
-        await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
+        await resetSessionAdditions();
         const endTime =
           typeof data.secondsRemaining === "number"
             ? Date.now() + data.secondsRemaining * 1000
@@ -910,7 +959,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
-        await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
+        await resetSessionAdditions();
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
         await recheckAllActiveTabs();
