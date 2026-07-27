@@ -20,7 +20,3 @@ A Chrome (MV3) extension that runs timed focus sessions and flags or blocks off-
 - `additions/` — review/promote sites added mid-session.
 - `offscreen.js` / `offscreen.html` — plays the completion chime (service workers can't use Audio directly).
 
-## Fixes in this pass
-
-- Soft-lock description in the popup said "5-second warning"; the overlay's actual grace period is 3 seconds ([content/overlay.js](content/overlay.js)). Corrected the copy.
-- The violation log rendered `entry.url`/`entry.lockMode` directly into `innerHTML`, allowing script injection from a crafted page URL. Now HTML-escaped before rendering ([log/log.js](log/log.js)).
