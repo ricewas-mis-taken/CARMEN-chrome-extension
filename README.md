@@ -1,4 +1,4 @@
-# Focus Tracker
+# CARMEN
 
 A Chrome (MV3) extension that runs timed focus sessions and flags or blocks off-topic tabs.
 
