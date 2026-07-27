@@ -321,36 +321,6 @@ function formatDurationSeconds(totalSeconds) {
   return `${remainingSeconds}s`;
 }
 
-// Service workers have no Audio()/Web Audio API, so a completion chime has
-// to be played from an offscreen document instead — the only extension
-// context that has a DOM at all. The document plays its chime immediately
-// on load (see offscreen.js) rather than waiting for a runtime message, so
-// there's nothing that can race a not-yet-registered listener. Close any
-// previous document first (chrome.offscreen only allows one at a time) so
-// createDocument always yields a genuinely fresh, guaranteed-to-load
-// document instead of silently reusing a stale one from a prior call.
-async function playCompletionSound() {
-  try {
-    try {
-      await chrome.offscreen.closeDocument();
-    } catch (err) {
-      // No existing document to close — fine, that's the common case.
-    }
-    await chrome.offscreen.createDocument({
-      url: "offscreen.html",
-      reasons: ["AUDIO_PLAYBACK"],
-      justification: "Play a completion chime when a focus session ends.",
-    });
-    // Give the chime (~0.5s) time to finish before tearing the document
-    // back down.
-    setTimeout(() => {
-      chrome.offscreen.closeDocument().catch(() => {});
-    }, 1500);
-  } catch (err) {
-    console.warn("Focus Tracker: could not play completion sound.", err);
-  }
-}
-
 // Fires the "session complete" notification for a natural (alarm-based) end.
 // GET /status self-finalizes an expired session on any poll (e.g. the popup's
 // 3s status poll), which resets violationCount/violationLog to zero before
@@ -391,7 +361,6 @@ async function notifySessionComplete() {
       message,
       silent: false,
     });
-    await playCompletionSound();
   } catch (err) {
     console.warn("Focus Tracker: could not build session-complete notification.", err);
   }
@@ -813,7 +782,7 @@ chrome.tabs.onAttached.addListener((tabId) => {
   recheckIfActive(tabId);
 });
 
-async function notifyLocalSessionComplete(session) {
+function notifyLocalSessionComplete(session) {
   const count = session.violationCount || 0;
   const message =
     count > 0
@@ -826,7 +795,6 @@ async function notifyLocalSessionComplete(session) {
     message,
     silent: false,
   });
-  await playCompletionSound();
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -835,7 +803,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const local = await getLocalSession();
     if (local.isActive) {
       await setLocalSession(defaultLocalSession());
-      await notifyLocalSessionComplete(local);
+      notifyLocalSessionComplete(local);
       return;
     }
     // The popup's own 3s status poll can beat this alarm to the punch and
