@@ -1,4 +1,4 @@
-// Focus Tracker soft-lock overlay. Injected on demand via chrome.scripting.executeScript.
+// CARMEN soft-lock overlay. Injected on demand via chrome.scripting.executeScript.
 (function () {
   if (window.__focusTrackerOverlayInit) return;
   window.__focusTrackerOverlayInit = true;

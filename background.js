@@ -1,4 +1,4 @@
-// Focus Tracker background service worker (MV3)
+// CARMEN background service worker (MV3)
 //
 // Session state (active/inactive, lock mode, duration, whitelists, violation
 // count) lives in the desktop app, not chrome.storage.local — except for
@@ -140,7 +140,7 @@ async function getSession() {
     };
   } catch (err) {
     console.warn(
-      "Focus Tracker: could not reach desktop app at",
+      "CARMEN: could not reach desktop app at",
       API_BASE,
       "- checking for a browser-only session instead.",
       err
@@ -231,7 +231,7 @@ async function forceCloseTab(tabId) {
       await withDragRetry(() => removeWindowVerified(tab.windowId));
     } catch (cleanupErr) {
       console.error(
-        "Focus Tracker: could not force-close a stranded drag tab/window.",
+        "CARMEN: could not force-close a stranded drag tab/window.",
         cleanupErr
       );
     }
@@ -362,7 +362,7 @@ async function notifySessionComplete() {
       silent: false,
     });
   } catch (err) {
-    console.warn("Focus Tracker: could not build session-complete notification.", err);
+    console.warn("CARMEN: could not build session-complete notification.", err);
   }
 }
 
@@ -409,7 +409,7 @@ function getHostname(url) {
 }
 
 async function handleTabUrl(tabId, url) {
-  console.log("Focus Tracker: handleTabUrl fired", { tabId, url });
+  console.log("CARMEN: handleTabUrl fired", { tabId, url });
 
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (lastHandledUrlByTab.get(tabId) === url) return;
@@ -419,7 +419,7 @@ async function handleTabUrl(tabId, url) {
   if (!session.isActive) return;
 
   const whitelisted = isWhitelisted(url, session.domainWhitelist);
-  console.log("Focus Tracker: checking url against domainWhitelist", {
+  console.log("CARMEN: checking url against domainWhitelist", {
     url,
     domainWhitelist: session.domainWhitelist,
     whitelisted,
@@ -446,7 +446,7 @@ async function handleTabUrl(tabId, url) {
       });
     } catch (err) {
       console.warn(
-        "Focus Tracker: could not report violation resolution to desktop app.",
+        "CARMEN: could not report violation resolution to desktop app.",
         err
       );
     }
@@ -475,7 +475,7 @@ async function handleTabUrl(tabId, url) {
           body: JSON.stringify({ url }),
         });
       } catch (err) {
-        console.warn("Focus Tracker: could not report violation to desktop app.", err);
+        console.warn("CARMEN: could not report violation to desktop app.", err);
       }
     }
   }
@@ -521,7 +521,7 @@ async function handleTabUrl(tabId, url) {
         tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
         tabs.find(isCandidate);
 
-      console.log("Focus Tracker: hard lock triggered", {
+      console.log("CARMEN: hard lock triggered", {
         tabId,
         url,
         currentWindowId: currentTab.windowId,
@@ -539,7 +539,7 @@ async function handleTabUrl(tabId, url) {
       // over focus and just close the tab.
       if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
         console.log(
-          "Focus Tracker: tab kept getting brought back after switch-away, closing it",
+          "CARMEN: tab kept getting brought back after switch-away, closing it",
           { tabId }
         );
         switchAwayAttemptsByTab.delete(tabId);
@@ -569,7 +569,7 @@ async function handleTabUrl(tabId, url) {
           const fallback = buildFallbackUrl(session.domainWhitelist);
           if (!fallback) {
             console.warn(
-              "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to open."
+              "CARMEN: hard lock triggered but domainWhitelist has no usable entries to open."
             );
             return;
           }
@@ -638,13 +638,13 @@ async function handleTabUrl(tabId, url) {
       } catch (err) {
         if (!isDragLockError(err)) throw err;
         console.log(
-          "Focus Tracker: switch-away still blocked after retries, closing the offending tab instead",
+          "CARMEN: switch-away still blocked after retries, closing the offending tab instead",
           { tabId }
         );
         await forceCloseTab(tabId);
       }
     } catch (err) {
-      console.error("Focus Tracker: hard lock action failed.", err);
+      console.error("CARMEN: hard lock action failed.", err);
     }
     return;
   }
@@ -690,7 +690,7 @@ async function recheckAllActiveTabs() {
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
-  console.log("Focus Tracker: onActivated fired", { tabId, windowId });
+  console.log("CARMEN: onActivated fired", { tabId, windowId });
   try {
     // Only treat this as a genuine "left and came back" if a DIFFERENT tab
     // was active in this window beforehand — that's what should let the
@@ -722,7 +722,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
 // by re-checking whichever tab is active in a window the moment it gains
 // OS focus.
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  console.log("Focus Tracker: onFocusChanged fired", { windowId });
+  console.log("CARMEN: onFocusChanged fired", { windowId });
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, windowId });
@@ -735,7 +735,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  console.log("Focus Tracker: onUpdated fired", { tabId, changeInfo });
+  console.log("CARMEN: onUpdated fired", { tabId, changeInfo });
   if (changeInfo.status === "complete" && tab.url) {
     await handleTabUrl(tabId, tab.url);
   } else if (changeInfo.url) {
@@ -773,12 +773,12 @@ async function recheckIfActive(tabId) {
 }
 
 chrome.tabs.onMoved.addListener((tabId) => {
-  console.log("Focus Tracker: onMoved fired", { tabId });
+  console.log("CARMEN: onMoved fired", { tabId });
   recheckIfActive(tabId);
 });
 
 chrome.tabs.onAttached.addListener((tabId) => {
-  console.log("Focus Tracker: onAttached fired", { tabId });
+  console.log("CARMEN: onAttached fired", { tabId });
   recheckIfActive(tabId);
 });
 
@@ -817,7 +817,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await apiFetch("/session/end", { method: "POST" });
     } catch (err) {
       console.warn(
-        "Focus Tracker: could not reach desktop app to end session (it may have already self-finalized).",
+        "CARMEN: could not reach desktop app to end session (it may have already self-finalized).",
         err
       );
     }
@@ -902,7 +902,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (err) {
         console.warn(
-          "Focus Tracker: could not reach desktop app to start session.",
+          "CARMEN: could not reach desktop app to start session.",
           err
         );
 
@@ -955,7 +955,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (err) {
         console.warn(
-          "Focus Tracker: could not reach desktop app to end session.",
+          "CARMEN: could not reach desktop app to end session.",
           err
         );
         sendResponse({ ok: false, error: String(err) });
@@ -986,7 +986,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
       } catch (err) {
-        console.warn("Focus Tracker: could not reach desktop app to pause session.", err);
+        console.warn("CARMEN: could not reach desktop app to pause session.", err);
         sendResponse({ ok: false, error: String(err) });
       }
     })();
@@ -1015,7 +1015,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         sendResponse({ ok: true });
       } catch (err) {
-        console.warn("Focus Tracker: could not reach desktop app to resume session.", err);
+        console.warn("CARMEN: could not reach desktop app to resume session.", err);
         sendResponse({ ok: false, error: String(err) });
       }
     })();
@@ -1059,7 +1059,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
       } catch (err) {
-        console.warn("Focus Tracker: could not add domain to whitelist.", err);
+        console.warn("CARMEN: could not add domain to whitelist.", err);
         sendResponse({ ok: false, error: String(err) });
       }
     })();
@@ -1080,7 +1080,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const history = await apiFetch("/history", { method: "GET" });
         sendResponse({ ok: true, history });
       } catch (err) {
-        console.warn("Focus Tracker: could not fetch history.", err);
+        console.warn("CARMEN: could not fetch history.", err);
         sendResponse({ ok: false, error: String(err) });
       }
     })();
