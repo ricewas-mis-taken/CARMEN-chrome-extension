@@ -40,10 +40,6 @@ const parseLines = (value) =>
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-// Awaited by the "Add sites from last session" handler below so it never
-// flushes the textarea to storage before this initial load has actually
-// populated it — that race would flush an empty parse and wipe the saved
-// whitelist instead of preserving it.
 const whitelistLoaded = chrome.storage.local.get(SAVED_WHITELIST_KEY).then((data) => {
   const saved = data[SAVED_WHITELIST_KEY];
   if (Array.isArray(saved) && saved.length > 0) {
@@ -51,11 +47,6 @@ const whitelistLoaded = chrome.storage.local.get(SAVED_WHITELIST_KEY).then((data
   }
 });
 
-// "Add a site" mid-session only applies to that one session — it's never
-// written to SAVED_WHITELIST_KEY. Surface a button here (setup view only,
-// i.e. only once there's no session running) whenever the last session
-// added something that isn't already on the saved whitelist, so the user
-// can fold it in instead of retyping it.
 async function refreshReviewAdditionsButton() {
   const data = await chrome.storage.local.get([SESSION_ADDITIONS_KEY, SAVED_WHITELIST_KEY]);
   const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
@@ -78,14 +69,6 @@ async function refreshReviewAdditionsButton() {
   reviewAdditionsBtn.classList.remove("hidden");
 }
 
-// Opening additions.html steals focus, which closes this popup before any
-// pending edit reaches storage — the Websites textarea otherwise only saves
-// on "Start Focus Session" (see comment on that flow below). Without
-// flushing here, unsaved edits sitting in the textarea are silently
-// dropped, and then additions.js's merge (which reads/writes
-// SAVED_WHITELIST_KEY directly against whatever's already in storage)
-// permanently overwrites storage without them — looking like "Add sites
-// from last session" deleted the user's existing whitelist entries.
 reviewAdditionsBtn.addEventListener("click", async () => {
   await whitelistLoaded;
   await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: parseLines(whitelistTextarea.value) });
@@ -128,12 +111,6 @@ whitelistTextarea.addEventListener("input", () => {
   whitelistTextarea.style.borderColor = "";
 });
 
-// If the desktop app is unreachable, a single click doesn't silently start a
-// degraded, unsynced session — the button arms into a "confirm" state and
-// the user has to click it again to actually start browser-only. Requiring
-// that second, explicit click is the whole point: it's an intentional
-// choice, not something that happens by default just because the desktop
-// app happened to be closed.
 let awaitingBrowserOnlyConfirm = false;
 let browserOnlyArmTimeout = null;
 const BROWSER_ONLY_ARM_WINDOW_MS = 5000;
@@ -165,28 +142,12 @@ startBtn.addEventListener("click", async () => {
 
   const domainWhitelist = parseLines(whitelistTextarea.value);
 
-  // Hard lock with an empty whitelist has nowhere safe to send you — every
-  // tab looks like a violation and there's no fallback destination, so
-  // enforcement just silently gives up and does nothing at all. Catch that
-  // here instead of letting the session start and appear completely broken.
   if (selectedLockMode === "hard" && domainWhitelist.length === 0) {
     whitelistTextarea.style.borderColor = "#e5484d";
     whitelistTextarea.placeholder = "Add at least one site — hard lock needs somewhere to send you";
     return;
   }
 
-  // This is the user's manually pre-filled whitelist — only the manual
-  // start flow writes it. A calendar-event session's whitelist is a
-  // temporary per-session override (set directly via the desktop API, not
-  // through this popup) and must never land here, or the next manual
-  // session would silently start with someone else's event's sites.
-  //
-  // Awaited deliberately: popups can be torn down the instant the user
-  // clicks away, which aborts any storage write still in flight. Without
-  // waiting for this to actually commit before doing anything else, an
-  // edit made right before hitting Start (e.g. deleting a domain) could
-  // silently fail to save, leaving the deleted domain back in the list the
-  // next time the popup opens.
   await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
   const browserOnly = awaitingBrowserOnlyConfirm;
@@ -251,9 +212,6 @@ nuclearBtn.addEventListener("click", () => {
   });
 });
 
-// Adding a site mid-session is a two-step flow: typing a domain and hitting
-// Add only reveals the reason box — nothing is sent to the desktop app until
-// a non-empty reason is submitted, so every addition has an audit trail.
 let pendingAddSiteDomain = null;
 
 function resetAddSiteForm() {
@@ -373,10 +331,6 @@ function renderActiveSession(session) {
   pauseBtn.classList.toggle("is-paused", !!session.isPaused);
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
 
-  // Calendar-event and task sessions run on a whitelist scoped to that
-  // event/task, not the whitelist saved in this popup's textarea — flag
-  // that here so the "Allowed sites" list not matching what the user
-  // manually typed in doesn't read as a bug.
   const isTaskSourced = session.source === "task";
   const isEventSourced = session.source === "calendar-event" || isTaskSourced;
   eventSourceRowEl.classList.toggle("hidden", !isEventSourced);
@@ -387,9 +341,6 @@ function renderActiveSession(session) {
 
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
-  // While paused the desktop app freezes secondsRemaining, so stop ticking
-  // locally too — otherwise the displayed countdown would drift down between
-  // 3s status polls even though the real session clock isn't moving.
   if (session.isPaused) {
     stopCountdown();
     countdownEl.textContent = formatCountdown(session.endTime - Date.now());

@@ -182,8 +182,6 @@ textarea#whitelist:focus {
   transform: translateY(0);
 }
 
-/* Active session view */
-
 .countdown {
   text-align: center;
   font-size: 40px;

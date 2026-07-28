@@ -3,10 +3,6 @@ const currentSummary = document.getElementById("current-summary");
 const currentLogBody = document.getElementById("current-log-body");
 const historyContainer = document.getElementById("history-container");
 
-// entry.url and entry.lockMode ultimately trace back to a page the user
-// navigated to (URL) or the desktop app's response — neither is trusted
-// input, so they can't go into innerHTML unescaped without opening an XSS
-// hole (e.g. a URL containing "<img src=x onerror=...>" via pushState).
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;",
@@ -48,7 +44,6 @@ function renderLogRows(tbody, violationLog) {
     return;
   }
 
-  // Newest first is easier to scan than the raw chronological log.
   [...violationLog].reverse().forEach((entry) => {
     const tr = document.createElement("tr");
     const label =
