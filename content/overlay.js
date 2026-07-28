@@ -1,10 +1,10 @@
 // CARMEN soft-lock overlay. Injected on demand via chrome.scripting.executeScript.
 (function () {
-  if (window.__focusTrackerOverlayInit) return;
-  window.__focusTrackerOverlayInit = true;
+  if (window.__carmenOverlayInit) return;
+  window.__carmenOverlayInit = true;
 
-  const OVERLAY_ID = "focus-tracker-overlay-root";
-  const BLACKOUT_ID = "focus-tracker-blackout-root";
+  const OVERLAY_ID = "carmen-overlay-root";
+  const BLACKOUT_ID = "carmen-blackout-root";
   const GRACE_SECONDS = 3;
 
   function showOverlay(timeRemainingText) {
@@ -23,7 +23,6 @@
       align-items: center;
       justify-content: center;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      animation: focus-tracker-fade-in 0.2s ease-out;
     `;
 
     const card = document.createElement("div");
