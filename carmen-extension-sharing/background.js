@@ -455,11 +455,13 @@ chrome.tabs.onAttached.addListener((tabId) => {
 });
 
 async function endActiveSession() {
-  const session = await getSession();
-  if (!session.isActive) return session;
-  await appendHistoryEntry(session);
-  await setSession(defaultSession());
-  return session;
+  return withStorageLock(async () => {
+    const session = await getSession();
+    if (!session.isActive) return session;
+    await appendHistoryEntry(session);
+    await setSession(defaultSession());
+    return session;
+  });
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -477,12 +479,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const { durationMinutes, lockMode, domainWhitelist } = message.payload;
       const endTime = Date.now() + durationMinutes * 60 * 1000;
 
-      await setSession({
-        ...defaultSession(),
-        isActive: true,
-        endTime,
-        lockMode,
-        domainWhitelist,
+      await withStorageLock(async () => {
+        await setSession({
+          ...defaultSession(),
+          isActive: true,
+          endTime,
+          lockMode,
+          domainWhitelist,
+        });
       });
 
       lastHandledUrlByTab.clear();
@@ -508,13 +512,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "pauseSession") {
     (async () => {
-      const session = await getSession();
-      if (!session.isActive) {
+      const paused = await withStorageLock(async () => {
+        const session = await getSession();
+        if (!session.isActive) return false;
+        const remainingMs = Math.max(0, session.endTime - Date.now());
+        await setSession({ ...session, isPaused: true, pausedRemainingMs: remainingMs });
+        return true;
+      });
+      if (!paused) {
         sendResponse({ ok: false });
         return;
       }
-      const remainingMs = Math.max(0, session.endTime - Date.now());
-      await setSession({ ...session, isPaused: true, pausedRemainingMs: remainingMs });
       await chrome.alarms.clear(ALARM_NAME);
       sendResponse({ ok: true });
     })();
@@ -523,13 +531,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "resumeSession") {
     (async () => {
-      const session = await getSession();
-      if (!session.isActive) {
+      const endTime = await withStorageLock(async () => {
+        const session = await getSession();
+        if (!session.isActive) return null;
+        const resumedEndTime = Date.now() + session.pausedRemainingMs;
+        await setSession({ ...session, isPaused: false, endTime: resumedEndTime, pausedRemainingMs: 0 });
+        return resumedEndTime;
+      });
+      if (endTime === null) {
         sendResponse({ ok: false });
         return;
       }
-      const endTime = Date.now() + session.pausedRemainingMs;
-      await setSession({ ...session, isPaused: false, endTime, pausedRemainingMs: 0 });
       chrome.alarms.create(ALARM_NAME, { when: endTime });
       sendResponse({ ok: true });
     })();
