@@ -1,4 +1,3 @@
-// CARMEN soft-lock overlay. Injected on demand via chrome.scripting.executeScript.
 (function () {
   if (window.__carmenOverlayInit) return;
   window.__carmenOverlayInit = true;
@@ -78,7 +77,6 @@
     root.appendChild(card);
     document.documentElement.appendChild(root);
 
-    // Kick off the shrink animation on the next frame.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         barFill.style.transform = "scaleX(0)";
@@ -90,12 +88,6 @@
     }, GRACE_SECONDS * 1000);
   }
 
-  // Hard lock's emergency cover: shown the moment Chrome's "user may be
-  // dragging a tab" lock blocks a switch-away/close, so restricted content
-  // stays hidden for as long as the hold lasts instead of just sitting there
-  // while background.js retries. No timer, no dismiss — only removed by an
-  // explicit hideBlackout message (or the tab closing, which ends this
-  // script entirely).
   function showBlackout() {
     if (document.getElementById(BLACKOUT_ID)) return;
     const root = document.createElement("div");

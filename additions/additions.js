@@ -12,9 +12,6 @@ function normalizeDomain(domain) {
   return (domain || "").trim().toLowerCase();
 }
 
-// Mid-session additions can include the same domain more than once (added,
-// removed some other way, added again) — collapse to one row per domain,
-// keeping the most recent reason.
 function dedupeAdditions(additions) {
   const byDomain = new Map();
   additions.forEach((entry) => {
