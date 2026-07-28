@@ -19,3 +19,7 @@ A Chrome (MV3) extension that runs timed focus sessions and flags or blocks off-
 - `content/overlay.js` — injected soft-lock overlay / hard-lock blackout.
 - `log/` — violation log viewer.
 - `additions/` — review/promote sites added mid-session.
+
+## Standalone build
+
+[`carmen-extension-sharing/`](carmen-extension-sharing/) is a self-contained copy of this extension with the desktop app sync stripped out — no local server, nothing to configure. Use it if you just want the browser extension on its own.
