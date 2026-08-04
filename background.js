@@ -6,6 +6,8 @@ function defaultSession() {
     isActive: false,
     isPaused: false,
     endTime: 0,
+    startedAt: null,
+    activeElapsedMs: 0,
     lockMode: "soft",
     domainWhitelist: [],
     processWhitelist: [],
@@ -15,6 +17,8 @@ function defaultSession() {
     source: "manual",
     eventId: null,
     eventTitle: null,
+    reviewProblemName: null,
+    reviewSubjectName: null,
   };
 }
 
@@ -35,7 +39,9 @@ function defaultLocalSession() {
     isActive: false,
     isPaused: false,
     endTime: 0,
+    startedAt: null,
     pausedRemainingMs: 0,
+    pauseEvents: [],
     lockMode: "soft",
     domainWhitelist: [],
     violationCount: 0,
@@ -78,13 +84,58 @@ async function resetSessionAdditions() {
   });
 }
 
+function toMs(value) {
+  if (typeof value === "number") return value;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Mirrors carmen-desktop's tasks_store.worked_seconds() exactly: replays the
+// pause/resume entries already timestamped in violationLog against
+// startedAt, rather than trying to notice isPaused transitions by polling.
+// Polling can't work here -- the service worker and popup aren't running
+// continuously, so a pause that happens while nothing is polling would only
+// be noticed after the fact, at which point it's too late to know when it
+// actually started. Replaying the real timestamps has no such gap.
+function computeActiveElapsedMs(startedAt, events) {
+  if (!startedAt) return 0;
+  const end = Date.now();
+  if (end <= startedAt) return 0;
+
+  const pauseEvents = (events || [])
+    .filter((e) => e.kind === "pause" || e.kind === "resume")
+    .map((e) => ({ kind: e.kind, ts: toMs(e.timestamp) }))
+    .filter((e) => Number.isFinite(e.ts))
+    .sort((a, b) => a.ts - b.ts);
+
+  let total = 0;
+  let cursor = startedAt;
+  let paused = false;
+  for (const event of pauseEvents) {
+    if (event.ts <= cursor) continue;
+    if (!paused) total += event.ts - cursor;
+    cursor = event.ts;
+    paused = event.kind === "pause";
+  }
+  if (!paused && end > cursor) {
+    total += end - cursor;
+  }
+  return Math.max(0, total);
+}
+
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
+    const isActive = !!data.isActive;
+    const isPaused = !!data.isPaused;
+    const startedAt = toMs(data.startTime);
+    const activeElapsedMs = isActive ? computeActiveElapsedMs(startedAt, data.violationLog) : 0;
     return {
-      isActive: !!data.isActive,
-      isPaused: !!data.isPaused,
-      endTime: data.isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
+      isActive,
+      isPaused,
+      endTime: isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
+      startedAt,
+      activeElapsedMs,
       lockMode: data.lockMode || "soft",
       domainWhitelist: data.domainWhitelist || [],
       processWhitelist: data.processWhitelist || [],
@@ -94,6 +145,8 @@ async function getSession() {
       source: data.source || "manual",
       eventId: data.eventId || null,
       eventTitle: data.eventTitle || null,
+      reviewProblemName: data.reviewProblemName || null,
+      reviewSubjectName: data.reviewSubjectName || null,
       desktopReachable: true,
     };
   } catch (err) {
@@ -107,10 +160,14 @@ async function getSession() {
     if (!local.isActive) {
       return { ...defaultSession(), desktopReachable: false };
     }
+    const startedAt = local.startedAt || null;
+    const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
     return {
       isActive: true,
       isPaused: local.isPaused,
       endTime: local.endTime,
+      startedAt,
+      activeElapsedMs,
       lockMode: local.lockMode,
       domainWhitelist: local.domainWhitelist,
       processWhitelist: [],
@@ -120,6 +177,8 @@ async function getSession() {
       source: "browser-only",
       eventId: null,
       eventTitle: null,
+      reviewProblemName: null,
+      reviewSubjectName: null,
       desktopReachable: false,
     };
   }
@@ -290,7 +349,7 @@ async function handleTabUrl(tabId, url) {
   lastHandledUrlByTab.set(tabId, url);
 
   const session = await getSession();
-  if (!session.isActive) return;
+  if (!session.isActive || session.isPaused) return;
 
   const whitelisted = isWhitelisted(url, session.domainWhitelist);
 
@@ -631,7 +690,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           isActive: true,
           isPaused: false,
           endTime,
+          startedAt: Date.now(),
           pausedRemainingMs: 0,
+          pauseEvents: [],
           lockMode,
           domainWhitelist,
           violationCount: 0,
@@ -680,7 +741,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const local = await getLocalSession();
       if (local.isActive) {
         const remainingMs = Math.max(0, local.endTime - Date.now());
-        await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs });
+        const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
+        await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
         await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
         return;
@@ -703,8 +765,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const local = await getLocalSession();
       if (local.isActive) {
         const endTime = Date.now() + local.pausedRemainingMs;
-        await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0 });
+        const pauseEvents = [...(local.pauseEvents || []), { kind: "resume", timestamp: Date.now() }];
+        await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0, pauseEvents });
         chrome.alarms.create(ALARM_NAME, { when: endTime });
+        lastHandledUrlByTab.clear();
+        await recheckAllActiveTabs();
         sendResponse({ ok: true });
         return;
       }
@@ -718,6 +783,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (endTime > 0) {
           chrome.alarms.create(ALARM_NAME, { when: endTime });
         }
+        lastHandledUrlByTab.clear();
+        await recheckAllActiveTabs();
         sendResponse({ ok: true });
       } catch (err) {
         console.warn("CARMEN: could not reach desktop app to resume session.", err);

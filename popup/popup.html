@@ -68,6 +68,7 @@
           <h1>CARMEN</h1>
         </header>
 
+        <div class="countdown-label">Time elapsed</div>
         <div class="countdown" id="countdown">00:00</div>
 
         <div class="badge-row">
@@ -78,6 +79,21 @@
         <div class="event-source-row hidden" id="event-source-row">
           <span class="event-source-icon" id="event-source-icon">📅</span>
           <span class="event-source-title" id="event-source-title"></span>
+        </div>
+
+        <div class="review-info hidden" id="review-info">
+          <div class="review-info-line">
+            <span class="review-info-label">Task</span>
+            <span id="review-info-task"></span>
+          </div>
+          <div class="review-info-line">
+            <span class="review-info-label">Review</span>
+            <span id="review-info-name"></span>
+          </div>
+          <div class="review-info-line hidden" id="review-info-subject-line">
+            <span class="review-info-label">Subject</span>
+            <span id="review-info-subject"></span>
+          </div>
         </div>
 
         <div class="browser-only-row hidden" id="browser-only-row">
