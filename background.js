@@ -41,6 +41,7 @@ function defaultLocalSession() {
     endTime: 0,
     startedAt: null,
     pausedRemainingMs: 0,
+    pauseEvents: [],
     lockMode: "soft",
     domainWhitelist: [],
     violationCount: 0,
@@ -83,45 +84,43 @@ async function resetSessionAdditions() {
   });
 }
 
-// Tracks how much of a session's wall-clock lifetime was spent paused, so
-// "time elapsed" can report actual active time instead of time-since-start.
-// Keyed off the session's own startedAt so a new session (different
-// startedAt) resets the count instead of inheriting a stale one. Driven
-// purely by observing isPaused transitions on every getSession() call
-// (from tab events and the popup's poll alike) rather than by the extension's
-// own pauseSession/resumeSession handlers, since a desktop-linked session
-// (e.g. a review) can be paused directly from the desktop app without those
-// handlers ever firing.
-const PAUSE_TRACKING_KEY = "pauseTracking";
+function toMs(value) {
+  if (typeof value === "number") return value;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
-async function trackActiveElapsedMs(isActive, isPaused, startedAt) {
-  if (!isActive || startedAt == null) {
-    await chrome.storage.local.remove(PAUSE_TRACKING_KEY);
-    return 0;
+// Mirrors carmen-desktop's tasks_store.worked_seconds() exactly: replays the
+// pause/resume entries already timestamped in violationLog against
+// startedAt, rather than trying to notice isPaused transitions by polling.
+// Polling can't work here -- the service worker and popup aren't running
+// continuously, so a pause that happens while nothing is polling would only
+// be noticed after the fact, at which point it's too late to know when it
+// actually started. Replaying the real timestamps has no such gap.
+function computeActiveElapsedMs(startedAt, events) {
+  if (!startedAt) return 0;
+  const end = Date.now();
+  if (end <= startedAt) return 0;
+
+  const pauseEvents = (events || [])
+    .filter((e) => e.kind === "pause" || e.kind === "resume")
+    .map((e) => ({ kind: e.kind, ts: toMs(e.timestamp) }))
+    .filter((e) => Number.isFinite(e.ts))
+    .sort((a, b) => a.ts - b.ts);
+
+  let total = 0;
+  let cursor = startedAt;
+  let paused = false;
+  for (const event of pauseEvents) {
+    if (event.ts <= cursor) continue;
+    if (!paused) total += event.ts - cursor;
+    cursor = event.ts;
+    paused = event.kind === "pause";
   }
-
-  const data = await chrome.storage.local.get(PAUSE_TRACKING_KEY);
-  const existing = data[PAUSE_TRACKING_KEY];
-  let tracking = existing;
-
-  if (!existing || existing.startedAt !== startedAt) {
-    tracking = { startedAt, accumulatedPausedMs: 0, pauseStartedAt: isPaused ? Date.now() : null };
-    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
-  } else if (isPaused && existing.pauseStartedAt == null) {
-    tracking = { ...existing, pauseStartedAt: Date.now() };
-    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
-  } else if (!isPaused && existing.pauseStartedAt != null) {
-    tracking = {
-      ...existing,
-      accumulatedPausedMs: existing.accumulatedPausedMs + (Date.now() - existing.pauseStartedAt),
-      pauseStartedAt: null,
-    };
-    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
+  if (!paused && end > cursor) {
+    total += end - cursor;
   }
-
-  const currentPauseMs = tracking.pauseStartedAt != null ? Date.now() - tracking.pauseStartedAt : 0;
-  const totalPausedMs = tracking.accumulatedPausedMs + currentPauseMs;
-  return Math.max(0, Date.now() - startedAt - totalPausedMs);
+  return Math.max(0, total);
 }
 
 async function getSession() {
@@ -129,9 +128,8 @@ async function getSession() {
     const data = await apiFetch("/status", { method: "GET" });
     const isActive = !!data.isActive;
     const isPaused = !!data.isPaused;
-    const startTimeMs = data.startTime ? new Date(data.startTime).getTime() : null;
-    const startedAt = Number.isFinite(startTimeMs) ? startTimeMs : null;
-    const activeElapsedMs = await trackActiveElapsedMs(isActive, isPaused, startedAt);
+    const startedAt = toMs(data.startTime);
+    const activeElapsedMs = isActive ? computeActiveElapsedMs(startedAt, data.violationLog) : 0;
     return {
       isActive,
       isPaused,
@@ -160,11 +158,10 @@ async function getSession() {
     );
     const local = await getLocalSession();
     if (!local.isActive) {
-      await trackActiveElapsedMs(false, false, null);
       return { ...defaultSession(), desktopReachable: false };
     }
     const startedAt = local.startedAt || null;
-    const activeElapsedMs = await trackActiveElapsedMs(true, local.isPaused, startedAt);
+    const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
     return {
       isActive: true,
       isPaused: local.isPaused,
@@ -695,6 +692,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           endTime,
           startedAt: Date.now(),
           pausedRemainingMs: 0,
+          pauseEvents: [],
           lockMode,
           domainWhitelist,
           violationCount: 0,
@@ -743,7 +741,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const local = await getLocalSession();
       if (local.isActive) {
         const remainingMs = Math.max(0, local.endTime - Date.now());
-        await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs });
+        const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
+        await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
         await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
         return;
@@ -766,7 +765,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const local = await getLocalSession();
       if (local.isActive) {
         const endTime = Date.now() + local.pausedRemainingMs;
-        await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0 });
+        const pauseEvents = [...(local.pauseEvents || []), { kind: "resume", timestamp: Date.now() }];
+        await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0, pauseEvents });
         chrome.alarms.create(ALARM_NAME, { when: endTime });
         lastHandledUrlByTab.clear();
         await recheckAllActiveTabs();
