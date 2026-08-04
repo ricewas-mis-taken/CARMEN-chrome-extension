@@ -6,6 +6,7 @@ function defaultSession() {
     isActive: false,
     isPaused: false,
     endTime: 0,
+    startedAt: null,
     lockMode: "soft",
     domainWhitelist: [],
     processWhitelist: [],
@@ -15,6 +16,8 @@ function defaultSession() {
     source: "manual",
     eventId: null,
     eventTitle: null,
+    reviewProblemName: null,
+    reviewSubjectName: null,
   };
 }
 
@@ -35,6 +38,7 @@ function defaultLocalSession() {
     isActive: false,
     isPaused: false,
     endTime: 0,
+    startedAt: null,
     pausedRemainingMs: 0,
     lockMode: "soft",
     domainWhitelist: [],
@@ -81,10 +85,12 @@ async function resetSessionAdditions() {
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
+    const startTimeMs = data.startTime ? new Date(data.startTime).getTime() : null;
     return {
       isActive: !!data.isActive,
       isPaused: !!data.isPaused,
       endTime: data.isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
+      startedAt: Number.isFinite(startTimeMs) ? startTimeMs : null,
       lockMode: data.lockMode || "soft",
       domainWhitelist: data.domainWhitelist || [],
       processWhitelist: data.processWhitelist || [],
@@ -94,6 +100,8 @@ async function getSession() {
       source: data.source || "manual",
       eventId: data.eventId || null,
       eventTitle: data.eventTitle || null,
+      reviewProblemName: data.reviewProblemName || null,
+      reviewSubjectName: data.reviewSubjectName || null,
       desktopReachable: true,
     };
   } catch (err) {
@@ -111,6 +119,7 @@ async function getSession() {
       isActive: true,
       isPaused: local.isPaused,
       endTime: local.endTime,
+      startedAt: local.startedAt || null,
       lockMode: local.lockMode,
       domainWhitelist: local.domainWhitelist,
       processWhitelist: [],
@@ -120,6 +129,8 @@ async function getSession() {
       source: "browser-only",
       eventId: null,
       eventTitle: null,
+      reviewProblemName: null,
+      reviewSubjectName: null,
       desktopReachable: false,
     };
   }
@@ -290,7 +301,7 @@ async function handleTabUrl(tabId, url) {
   lastHandledUrlByTab.set(tabId, url);
 
   const session = await getSession();
-  if (!session.isActive) return;
+  if (!session.isActive || session.isPaused) return;
 
   const whitelisted = isWhitelisted(url, session.domainWhitelist);
 
@@ -631,6 +642,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           isActive: true,
           isPaused: false,
           endTime,
+          startedAt: Date.now(),
           pausedRemainingMs: 0,
           lockMode,
           domainWhitelist,
@@ -705,6 +717,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const endTime = Date.now() + local.pausedRemainingMs;
         await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0 });
         chrome.alarms.create(ALARM_NAME, { when: endTime });
+        lastHandledUrlByTab.clear();
+        await recheckAllActiveTabs();
         sendResponse({ ok: true });
         return;
       }
@@ -718,6 +732,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (endTime > 0) {
           chrome.alarms.create(ALARM_NAME, { when: endTime });
         }
+        lastHandledUrlByTab.clear();
+        await recheckAllActiveTabs();
         sendResponse({ ok: true });
       } catch (err) {
         console.warn("CARMEN: could not reach desktop app to resume session.", err);

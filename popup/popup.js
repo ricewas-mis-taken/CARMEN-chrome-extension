@@ -20,6 +20,11 @@ const eventSourceRowEl = document.getElementById("event-source-row");
 const eventSourceIconEl = document.getElementById("event-source-icon");
 const eventSourceTitleEl = document.getElementById("event-source-title");
 const browserOnlyRowEl = document.getElementById("browser-only-row");
+const reviewInfoEl = document.getElementById("review-info");
+const reviewInfoTaskEl = document.getElementById("review-info-task");
+const reviewInfoNameEl = document.getElementById("review-info-name");
+const reviewInfoSubjectLineEl = document.getElementById("review-info-subject-line");
+const reviewInfoSubjectEl = document.getElementById("review-info-subject");
 
 const addSiteInput = document.getElementById("add-site-input");
 const addSiteBtn = document.getElementById("add-site-btn");
@@ -278,22 +283,21 @@ function showActiveView() {
   activeView.classList.remove("hidden");
 }
 
-function formatCountdown(msLeft) {
-  const totalSeconds = Math.max(0, Math.ceil(msLeft / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
+function formatElapsed(msElapsed) {
+  const totalSeconds = Math.max(0, Math.floor(msElapsed / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
-    2,
-    "0"
-  )}`;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function startCountdown(endTime) {
+function startCountdown(endTime, startedAt) {
   stopCountdown();
   const tick = () => {
-    const msLeft = endTime - Date.now();
-    countdownEl.textContent = formatCountdown(msLeft);
-    if (msLeft <= 0) {
+    countdownEl.textContent = formatElapsed(Date.now() - startedAt);
+    if (endTime - Date.now() <= 0) {
       stopCountdown();
       showSetupView();
     }
@@ -332,20 +336,31 @@ function renderActiveSession(session) {
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
 
   const isTaskSourced = session.source === "task";
-  const isEventSourced = session.source === "calendar-event" || isTaskSourced;
+  const isReviewSourced = session.source === "review";
+  const isEventSourced = (session.source === "calendar-event" || isTaskSourced) && !isReviewSourced;
   eventSourceRowEl.classList.toggle("hidden", !isEventSourced);
   eventSourceIconEl.textContent = isTaskSourced ? "🔁" : "📅";
   eventSourceTitleEl.textContent = isEventSourced
     ? session.eventTitle || (isTaskSourced ? "Task" : "Calendar event")
     : "";
 
+  reviewInfoEl.classList.toggle("hidden", !isReviewSourced);
+  if (isReviewSourced) {
+    reviewInfoTaskEl.textContent = session.eventTitle || "—";
+    reviewInfoNameEl.textContent = session.reviewProblemName || "—";
+    const hasSubject = !!session.reviewSubjectName;
+    reviewInfoSubjectLineEl.classList.toggle("hidden", !hasSubject);
+    reviewInfoSubjectEl.textContent = session.reviewSubjectName || "";
+  }
+
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
+  const startedAt = session.startedAt || Date.now();
   if (session.isPaused) {
     stopCountdown();
-    countdownEl.textContent = formatCountdown(session.endTime - Date.now());
+    countdownEl.textContent = formatElapsed(Date.now() - startedAt);
   } else {
-    startCountdown(session.endTime);
+    startCountdown(session.endTime, startedAt);
   }
 }
 

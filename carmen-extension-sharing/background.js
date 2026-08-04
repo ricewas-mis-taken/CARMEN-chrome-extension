@@ -244,7 +244,7 @@ async function handleTabUrl(tabId, url) {
   lastHandledUrlByTab.set(tabId, url);
 
   const session = await getSession();
-  if (!session.isActive) return;
+  if (!session.isActive || session.isPaused) return;
 
   const whitelisted = isWhitelisted(url, session.domainWhitelist);
 
@@ -543,6 +543,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       chrome.alarms.create(ALARM_NAME, { when: endTime });
+      lastHandledUrlByTab.clear();
+      await recheckAllActiveTabs();
       sendResponse({ ok: true });
     })();
     return true;
