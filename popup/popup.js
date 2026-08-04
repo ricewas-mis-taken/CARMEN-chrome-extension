@@ -293,10 +293,11 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function startCountdown(endTime, startedAt) {
+function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp) {
   stopCountdown();
   const tick = () => {
-    countdownEl.textContent = formatElapsed(Date.now() - startedAt);
+    const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
+    countdownEl.textContent = formatElapsed(elapsed);
     if (endTime - Date.now() <= 0) {
       stopCountdown();
       showSetupView();
@@ -355,12 +356,12 @@ function renderActiveSession(session) {
 
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
-  const startedAt = session.startedAt || Date.now();
+  const activeElapsedMs = session.activeElapsedMs || 0;
   if (session.isPaused) {
     stopCountdown();
-    countdownEl.textContent = formatElapsed(Date.now() - startedAt);
+    countdownEl.textContent = formatElapsed(activeElapsedMs);
   } else {
-    startCountdown(session.endTime, startedAt);
+    startCountdown(session.endTime, activeElapsedMs, Date.now());
   }
 }
 

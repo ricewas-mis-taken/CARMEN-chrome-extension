@@ -7,6 +7,7 @@ function defaultSession() {
     isPaused: false,
     endTime: 0,
     startedAt: null,
+    activeElapsedMs: 0,
     lockMode: "soft",
     domainWhitelist: [],
     processWhitelist: [],
@@ -82,15 +83,61 @@ async function resetSessionAdditions() {
   });
 }
 
+// Tracks how much of a session's wall-clock lifetime was spent paused, so
+// "time elapsed" can report actual active time instead of time-since-start.
+// Keyed off the session's own startedAt so a new session (different
+// startedAt) resets the count instead of inheriting a stale one. Driven
+// purely by observing isPaused transitions on every getSession() call
+// (from tab events and the popup's poll alike) rather than by the extension's
+// own pauseSession/resumeSession handlers, since a desktop-linked session
+// (e.g. a review) can be paused directly from the desktop app without those
+// handlers ever firing.
+const PAUSE_TRACKING_KEY = "pauseTracking";
+
+async function trackActiveElapsedMs(isActive, isPaused, startedAt) {
+  if (!isActive || startedAt == null) {
+    await chrome.storage.local.remove(PAUSE_TRACKING_KEY);
+    return 0;
+  }
+
+  const data = await chrome.storage.local.get(PAUSE_TRACKING_KEY);
+  const existing = data[PAUSE_TRACKING_KEY];
+  let tracking = existing;
+
+  if (!existing || existing.startedAt !== startedAt) {
+    tracking = { startedAt, accumulatedPausedMs: 0, pauseStartedAt: isPaused ? Date.now() : null };
+    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
+  } else if (isPaused && existing.pauseStartedAt == null) {
+    tracking = { ...existing, pauseStartedAt: Date.now() };
+    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
+  } else if (!isPaused && existing.pauseStartedAt != null) {
+    tracking = {
+      ...existing,
+      accumulatedPausedMs: existing.accumulatedPausedMs + (Date.now() - existing.pauseStartedAt),
+      pauseStartedAt: null,
+    };
+    await chrome.storage.local.set({ [PAUSE_TRACKING_KEY]: tracking });
+  }
+
+  const currentPauseMs = tracking.pauseStartedAt != null ? Date.now() - tracking.pauseStartedAt : 0;
+  const totalPausedMs = tracking.accumulatedPausedMs + currentPauseMs;
+  return Math.max(0, Date.now() - startedAt - totalPausedMs);
+}
+
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
+    const isActive = !!data.isActive;
+    const isPaused = !!data.isPaused;
     const startTimeMs = data.startTime ? new Date(data.startTime).getTime() : null;
+    const startedAt = Number.isFinite(startTimeMs) ? startTimeMs : null;
+    const activeElapsedMs = await trackActiveElapsedMs(isActive, isPaused, startedAt);
     return {
-      isActive: !!data.isActive,
-      isPaused: !!data.isPaused,
-      endTime: data.isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
-      startedAt: Number.isFinite(startTimeMs) ? startTimeMs : null,
+      isActive,
+      isPaused,
+      endTime: isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
+      startedAt,
+      activeElapsedMs,
       lockMode: data.lockMode || "soft",
       domainWhitelist: data.domainWhitelist || [],
       processWhitelist: data.processWhitelist || [],
@@ -113,13 +160,17 @@ async function getSession() {
     );
     const local = await getLocalSession();
     if (!local.isActive) {
+      await trackActiveElapsedMs(false, false, null);
       return { ...defaultSession(), desktopReachable: false };
     }
+    const startedAt = local.startedAt || null;
+    const activeElapsedMs = await trackActiveElapsedMs(true, local.isPaused, startedAt);
     return {
       isActive: true,
       isPaused: local.isPaused,
       endTime: local.endTime,
-      startedAt: local.startedAt || null,
+      startedAt,
+      activeElapsedMs,
       lockMode: local.lockMode,
       domainWhitelist: local.domainWhitelist,
       processWhitelist: [],
