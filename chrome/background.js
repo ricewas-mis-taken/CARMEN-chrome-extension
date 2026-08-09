@@ -1,3 +1,7 @@
+import { startPolling } from "./core/rules-client.js";
+import { getConnectionStatus } from "./core/rules-cache.js";
+import { POLL_INTERVAL_MS } from "./core/constants.js";
+
 const API_BASE = "http://127.0.0.1:5847";
 const ALARM_NAME = "focusSessionEnd";
 
@@ -620,6 +624,38 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await notifySessionComplete();
   }
 });
+
+// Cross-browser/cross-profile whitelist sync: keeps the saved whitelist
+// (core/rules-cache.js -- the same storage key popup.js's Start-Session
+// preset has always used) synced with the desktop app's Flask API, so
+// every Chrome profile, Edge window, and Firefox instance on this machine
+// enforces the same list instead of drifting independently. See
+// core/rules-client.js for the fail-secure fallback behavior.
+async function updateSyncBadge() {
+  const status = await getConnectionStatus(chrome.storage.local);
+  if (status === "connected") {
+    chrome.action.setBadgeText({ text: "" });
+    chrome.action.setTitle({ title: "CARMEN — connected to desktop app" });
+  } else {
+    chrome.action.setBadgeText({ text: "!" });
+    chrome.action.setBadgeBackgroundColor({ color: "#e5484d" });
+    chrome.action.setTitle({
+      title: "CARMEN — using cached whitelist, desktop app unreachable",
+    });
+  }
+}
+
+startPolling({
+  storageApi: chrome.storage.local,
+  fetchImpl: fetch,
+  onChange: () => recheckAllActiveTabs(),
+});
+
+// rules-client.js has no chrome.* dependency, so it can't drive the badge
+// itself -- refresh it here on the same cadence (cheap: reads storage,
+// makes no network request of its own).
+updateSyncBadge();
+setInterval(updateSyncBadge, POLL_INTERVAL_MS);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {

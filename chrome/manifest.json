@@ -6,7 +6,8 @@
   "permissions": ["tabs", "storage", "scripting", "alarms", "notifications"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:5847/*"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup/popup.html",

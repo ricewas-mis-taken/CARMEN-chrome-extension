@@ -1,5 +1,7 @@
+import { getCachedRules } from "../core/rules-cache.js";
+import { saveWhitelist } from "../core/rules-client.js";
+
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
-const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
 
 const emptyStateEl = document.getElementById("empty-state");
 const listEl = document.getElementById("additions-list");
@@ -23,11 +25,11 @@ function dedupeAdditions(additions) {
 }
 
 async function load() {
-  const data = await chrome.storage.local.get([SESSION_ADDITIONS_KEY, SAVED_WHITELIST_KEY]);
+  const data = await chrome.storage.local.get(SESSION_ADDITIONS_KEY);
   const additions = dedupeAdditions(
     Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : []
   );
-  const savedWhitelist = Array.isArray(data[SAVED_WHITELIST_KEY]) ? data[SAVED_WHITELIST_KEY] : [];
+  const { domainWhitelist: savedWhitelist } = await getCachedRules(chrome.storage.local);
   const savedSet = new Set(savedWhitelist.map(normalizeDomain));
 
   if (additions.length === 0) {
@@ -83,17 +85,14 @@ addSelectedBtn.addEventListener("click", async () => {
 
   addSelectedBtn.disabled = true;
 
-  const data = await chrome.storage.local.get(SAVED_WHITELIST_KEY);
-  const savedWhitelist = Array.isArray(data[SAVED_WHITELIST_KEY]) ? data[SAVED_WHITELIST_KEY] : [];
+  const { domainWhitelist: savedWhitelist } = await getCachedRules(chrome.storage.local);
   const savedSet = new Set(savedWhitelist.map(normalizeDomain));
 
   const toAdd = checkedDomains.filter((domain) => !savedSet.has(normalizeDomain(domain)));
   const updatedWhitelist = [...savedWhitelist, ...toAdd];
 
-  await chrome.storage.local.set({
-    [SAVED_WHITELIST_KEY]: updatedWhitelist,
-    [SESSION_ADDITIONS_KEY]: [],
-  });
+  await saveWhitelist({ storageApi: chrome.storage.local, domainWhitelist: updatedWhitelist });
+  await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
 
   statusMessageEl.textContent =
     toAdd.length > 0
