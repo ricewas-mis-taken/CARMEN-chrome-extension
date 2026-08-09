@@ -6,7 +6,8 @@
   "permissions": ["tabs", "storage", "scripting", "alarms", "notifications"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:5847/*"],
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["background.js"],
+    "type": "module"
   },
   "action": {
     "default_popup": "popup/popup.html",
@@ -14,5 +15,11 @@
   },
   "icons": {
     "128": "icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "carmen-focus@ricewas-mis-taken.example",
+      "strict_min_version": "128.0"
+    }
   }
 }

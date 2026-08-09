@@ -1,3 +1,6 @@
+import { getCachedRules } from "../core/rules-cache.js";
+import { saveWhitelist } from "../core/rules-client.js";
+
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
@@ -36,7 +39,6 @@ const addSiteStatusEl = document.getElementById("add-site-status");
 
 const reviewAdditionsBtn = document.getElementById("review-additions-btn");
 
-const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 
 const parseLines = (value) =>
@@ -45,17 +47,20 @@ const parseLines = (value) =>
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-const whitelistLoaded = chrome.storage.local.get(SAVED_WHITELIST_KEY).then((data) => {
-  const saved = data[SAVED_WHITELIST_KEY];
-  if (Array.isArray(saved) && saved.length > 0) {
-    whitelistTextarea.value = saved.join("\n");
+// Reads from the synced cache (core/rules-cache.js) rather than raw
+// storage.local -- background.js's polling keeps it up to date with
+// whatever the desktop app has, which may have been edited from a
+// different Chrome profile, Edge, or Firefox since this popup last opened.
+const whitelistLoaded = getCachedRules(chrome.storage.local).then(({ domainWhitelist }) => {
+  if (Array.isArray(domainWhitelist) && domainWhitelist.length > 0) {
+    whitelistTextarea.value = domainWhitelist.join("\n");
   }
 });
 
 async function refreshReviewAdditionsButton() {
-  const data = await chrome.storage.local.get([SESSION_ADDITIONS_KEY, SAVED_WHITELIST_KEY]);
+  const data = await chrome.storage.local.get(SESSION_ADDITIONS_KEY);
   const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
-  const saved = Array.isArray(data[SAVED_WHITELIST_KEY]) ? data[SAVED_WHITELIST_KEY] : [];
+  const { domainWhitelist: saved } = await getCachedRules(chrome.storage.local);
   const savedSet = new Set(saved.map((d) => (d || "").trim().toLowerCase()));
 
   const unsavedDomains = new Set(
@@ -76,7 +81,7 @@ async function refreshReviewAdditionsButton() {
 
 reviewAdditionsBtn.addEventListener("click", async () => {
   await whitelistLoaded;
-  await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: parseLines(whitelistTextarea.value) });
+  await saveWhitelist({ storageApi: chrome.storage.local, domainWhitelist: parseLines(whitelistTextarea.value) });
   chrome.tabs.create({ url: chrome.runtime.getURL("additions/additions.html") });
 });
 
@@ -153,7 +158,11 @@ startBtn.addEventListener("click", async () => {
     return;
   }
 
-  await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
+  // Pushes to the desktop app (core/rules-client.js) so every other Chrome
+  // profile/Edge/Firefox instance's next poll picks up this edit too; if
+  // the desktop app is unreachable it still saves to this profile's own
+  // cache so the edit isn't lost, it just doesn't propagate yet.
+  await saveWhitelist({ storageApi: chrome.storage.local, domainWhitelist });
 
   const browserOnly = awaitingBrowserOnlyConfirm;
 
