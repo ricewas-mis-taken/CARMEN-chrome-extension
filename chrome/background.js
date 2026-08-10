@@ -266,25 +266,17 @@ function isWhitelisted(url, whitelist) {
   });
 }
 
-// Prefers a bare-domain entry (e.g. "gmail.com") over a path-scoped one
-// (e.g. "https://workspace.google.com/intl/en-US/gmail/") as hard lock's
-// redirect target. A path-scoped entry is matched by exact origin+pathname
-// (see isWhitelisted below), and it's exactly the kind of URL -- a
-// marketing/landing page, not the actual app -- that tends to redirect to
-// a different path once loaded (locale redirect, canonical URL, a login
-// bounce). The moment it does, the tab it was just opened in no longer
-// matches, hard lock treats that as a fresh violation, and opens the same
-// redirect-prone URL again -- an infinite loop of new tabs. A bare domain
-// is matched by hostname only, so it survives that kind of redirect as
-// long as it stays on the same host.
-function buildFallbackUrl(domainWhitelist) {
-  const candidates = (domainWhitelist || []).map((entry) => (entry || "").trim()).filter(Boolean);
-  if (candidates.length === 0) return "";
-  const withoutProtocol = (entry) => entry.replace(/^https?:\/\//i, "");
-  const bareDomain = candidates.find((entry) => !withoutProtocol(entry).includes("/"));
-  const chosen = bareDomain || candidates[0];
-  return /^https?:\/\//i.test(chosen) ? chosen : `https://${chosen}`;
-}
+// Hard lock never opens a new tab to a whitelisted domain -- an earlier
+// version did (see git history), and any whitelist entry that's a
+// redirect-prone URL (a marketing/landing page, not the real app) could
+// turn that into an infinite loop: open it, it redirects off-whitelist,
+// that reads as a fresh violation on the tab that redirect just landed in,
+// so hard lock opens it again, forever. Sending the offending tab to the
+// browser's own new-tab/homepage page instead is inherently safe: it can
+// never itself be a violation (doesn't match /^https?:\/\//), so it can't
+// re-trigger hard lock, and it doesn't touch any other tab -- which
+// matters for tab groups, see the collapsed-group filtering below.
+const HOMEPAGE_URL = "chrome://newtab/";
 
 function formatTimeRemaining(endTime) {
   const msLeft = Math.max(0, endTime - Date.now());
@@ -352,24 +344,29 @@ const openViolationTabs = new Set();
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
 
-// switchAwayAttemptsByTab caps retries against a single offending tabId --
-// it does nothing if the fallback tab hard lock just opened itself becomes
-// the next "offending" tab (a fresh tabId, so its own attempt count starts
-// at 0), which is exactly what a redirect-prone whitelist entry causes:
-// open fallback -> it redirects off-whitelist -> that's a new violation on
-// a new tabId -> open another fallback -> repeat. This is a global,
-// short-window cap on fallback-tab creation itself, independent of tabId,
-// as a last-resort backstop against that cascade -- buildFallbackUrl()
-// above is the actual fix for the redirect-prone-entry case, this just
-// guarantees the failure mode can never be "infinite" regardless of cause.
-const FALLBACK_TAB_LIMIT = 3;
-const FALLBACK_TAB_WINDOW_MS = 10000;
-let fallbackTabTimestamps = [];
-
-function fallbackTabCreationAllowed() {
-  const now = Date.now();
-  fallbackTabTimestamps = fallbackTabTimestamps.filter((t) => now - t < FALLBACK_TAB_WINDOW_MS);
-  return fallbackTabTimestamps.length < FALLBACK_TAB_LIMIT;
+// Tabs sitting in a collapsed group are hidden from view -- switching
+// focus into one forces Chrome to expand that group, which is exactly the
+// kind of surprise a "close this group" click shouldn't produce (closing
+// a group can make some other tab active; if that tab is a violation,
+// hard lock used to happily switch into any whitelisted tab it could
+// find, including one buried in a collapsed group, or one still being
+// torn down as part of the very group the user just closed -- reads as
+// "closing the group reopens it"). Excluding collapsed-group tabs from the
+// candidate search, combined with never creating new tabs (see
+// HOMEPAGE_URL above), means hard lock only ever switches to a tab that's
+// already genuinely visible.
+//
+// Feature-detected: chrome.tabGroups requires the "tabGroups" permission
+// and a reasonably recent browser -- if it's unavailable for any reason,
+// this just doesn't filter anything rather than breaking hard lock.
+async function getCollapsedGroupIds() {
+  if (!chrome.tabGroups) return new Set();
+  try {
+    const groups = await chrome.tabGroups.query({ collapsed: true });
+    return new Set(groups.map((g) => g.id));
+  } catch (err) {
+    return new Set();
+  }
 }
 
 function getHostname(url) {
@@ -444,11 +441,14 @@ async function handleTabUrl(tabId, url) {
 
     try {
       const tabs = await chrome.tabs.query({});
+      const collapsedGroupIds = await getCollapsedGroupIds();
+      const NO_GROUP = typeof chrome.tabGroups !== "undefined" ? chrome.tabGroups.TAB_GROUP_ID_NONE : -1;
       const isCandidate = (t) =>
         t.id !== tabId &&
         t.url &&
         /^https?:\/\//i.test(t.url) &&
-        isWhitelisted(t.url, session.domainWhitelist);
+        isWhitelisted(t.url, session.domainWhitelist) &&
+        !(t.groupId !== undefined && t.groupId !== NO_GROUP && collapsedGroupIds.has(t.groupId));
 
       const regulatedTab =
         tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
@@ -473,26 +473,35 @@ async function handleTabUrl(tabId, url) {
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
-          if (!fallbackTabCreationAllowed()) {
-            console.error(
-              "CARMEN: hard lock kept needing a new fallback tab -- stopping to avoid an open-tab loop. Check that your domain whitelist entries are clean domains, not URLs that might redirect."
-            );
-            return;
+          // No other visible, already-open whitelisted tab -- send this
+          // tab to the browser's own homepage rather than opening
+          // anything. See HOMEPAGE_URL above for why.
+          await chrome.tabs.update(tabId, { url: HOMEPAGE_URL });
+          lastAcceptableUrl = "";
+          // Unlike the regulatedTab branch above (which leaves the
+          // offending tab exactly where it was, just unfocused), this
+          // actually navigates it off the violating URL -- so treat the
+          // violation as resolved the same way reaching a whitelisted URL
+          // does, and clear the dedup entry so revisiting the same URL in
+          // this same tab later is evaluated fresh instead of silently
+          // ignored (onUpdated firing again with this tab's URL unchanged
+          // from what lastHandledUrlByTab already has recorded).
+          lastHandledUrlByTab.delete(tabId);
+          const hadOpenViolation = openViolationTabs.delete(tabId);
+          if (hadOpenViolation && session.source !== "browser-only") {
+            try {
+              await apiFetch("/violation/resolved", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "domain" }),
+              });
+            } catch (err) {
+              console.warn(
+                "CARMEN: could not report violation resolution to desktop app.",
+                err
+              );
+            }
           }
-          const fallback = buildFallbackUrl(session.domainWhitelist);
-          if (!fallback) {
-            console.warn(
-              "CARMEN: hard lock triggered but domainWhitelist has no usable entries to open."
-            );
-            return;
-          }
-          await chrome.tabs.create({
-            url: fallback,
-            active: true,
-            windowId: currentTab.windowId,
-          });
-          fallbackTabTimestamps.push(Date.now());
-          lastAcceptableUrl = fallback;
         }
       };
 
