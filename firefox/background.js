@@ -273,11 +273,24 @@ function isWhitelisted(url, whitelist) {
   });
 }
 
+// Prefers a bare-domain entry (e.g. "gmail.com") over a path-scoped one
+// (e.g. "https://workspace.google.com/intl/en-US/gmail/") as hard lock's
+// redirect target. A path-scoped entry is matched by exact origin+pathname
+// (see isWhitelisted below), and it's exactly the kind of URL -- a
+// marketing/landing page, not the actual app -- that tends to redirect to
+// a different path once loaded (locale redirect, canonical URL, a login
+// bounce). The moment it does, the tab it was just opened in no longer
+// matches, hard lock treats that as a fresh violation, and opens the same
+// redirect-prone URL again -- an infinite loop of new tabs. A bare domain
+// is matched by hostname only, so it survives that kind of redirect as
+// long as it stays on the same host.
 function buildFallbackUrl(domainWhitelist) {
-  const first = (domainWhitelist || []).find((entry) => (entry || "").trim().length > 0);
-  if (!first) return "";
-  const trimmed = first.trim();
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const candidates = (domainWhitelist || []).map((entry) => (entry || "").trim()).filter(Boolean);
+  if (candidates.length === 0) return "";
+  const withoutProtocol = (entry) => entry.replace(/^https?:\/\//i, "");
+  const bareDomain = candidates.find((entry) => !withoutProtocol(entry).includes("/"));
+  const chosen = bareDomain || candidates[0];
+  return /^https?:\/\//i.test(chosen) ? chosen : `https://${chosen}`;
 }
 
 function formatTimeRemaining(endTime) {
@@ -345,6 +358,26 @@ const activeTabByWindow = new Map();
 const openViolationTabs = new Set();
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
+
+// switchAwayAttemptsByTab caps retries against a single offending tabId --
+// it does nothing if the fallback tab hard lock just opened itself becomes
+// the next "offending" tab (a fresh tabId, so its own attempt count starts
+// at 0), which is exactly what a redirect-prone whitelist entry causes:
+// open fallback -> it redirects off-whitelist -> that's a new violation on
+// a new tabId -> open another fallback -> repeat. This is a global,
+// short-window cap on fallback-tab creation itself, independent of tabId,
+// as a last-resort backstop against that cascade -- buildFallbackUrl()
+// above is the actual fix for the redirect-prone-entry case, this just
+// guarantees the failure mode can never be "infinite" regardless of cause.
+const FALLBACK_TAB_LIMIT = 3;
+const FALLBACK_TAB_WINDOW_MS = 10000;
+let fallbackTabTimestamps = [];
+
+function fallbackTabCreationAllowed() {
+  const now = Date.now();
+  fallbackTabTimestamps = fallbackTabTimestamps.filter((t) => now - t < FALLBACK_TAB_WINDOW_MS);
+  return fallbackTabTimestamps.length < FALLBACK_TAB_LIMIT;
+}
 
 function getHostname(url) {
   try {
@@ -447,6 +480,12 @@ async function handleTabUrl(tabId, url) {
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
+          if (!fallbackTabCreationAllowed()) {
+            console.error(
+              "CARMEN: hard lock kept needing a new fallback tab -- stopping to avoid an open-tab loop. Check that your domain whitelist entries are clean domains, not URLs that might redirect."
+            );
+            return;
+          }
           const fallback = buildFallbackUrl(session.domainWhitelist);
           if (!fallback) {
             console.warn(
@@ -459,6 +498,7 @@ async function handleTabUrl(tabId, url) {
             active: true,
             windowId: currentTab.windowId,
           });
+          fallbackTabTimestamps.push(Date.now());
           lastAcceptableUrl = fallback;
         }
       };
