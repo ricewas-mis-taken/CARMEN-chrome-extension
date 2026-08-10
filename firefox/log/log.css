@@ -129,6 +129,14 @@ h2 {
   margin-bottom: 8px;
 }
 
+.source-label,
+.session-source-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3f8f86;
+  margin: 0 0 8px;
+}
+
 .empty-state {
   font-size: 13px;
   color: #9aa5b1;
