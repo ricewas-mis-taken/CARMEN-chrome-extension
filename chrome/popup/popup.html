@@ -51,6 +51,12 @@
             placeholder="github.com&#10;docs.google.com&#10;stackoverflow.com"
           ></textarea>
           <span class="hint">One domain or URL substring per line.</span>
+          <div class="whitelist-save-row">
+            <button type="button" id="save-whitelist-btn" class="secondary-btn">
+              Save Websites
+            </button>
+            <span class="hint" id="save-whitelist-status"></span>
+          </div>
         </div>
 
         <button type="button" id="start-btn" class="primary-btn">
@@ -59,6 +65,10 @@
 
         <button type="button" id="review-additions-btn" class="ghost-btn review-additions-btn hidden">
           Add sites from last session
+        </button>
+
+        <button type="button" id="setup-view-log-btn" class="ghost-btn">
+          View Session History
         </button>
       </section>
 

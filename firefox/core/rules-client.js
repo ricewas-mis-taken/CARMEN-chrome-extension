@@ -145,7 +145,8 @@ export async function saveWhitelist({
   domainWhitelist,
 }) {
   try {
-    return await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist });
+    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist });
+    return { ...rules, synced: true };
   } catch (err) {
     console.warn(
       "CARMEN: could not sync whitelist edit to desktop app, saved to this profile only.",
@@ -154,6 +155,6 @@ export async function saveWhitelist({
     const cached = await getCachedRules(storageApi);
     const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt };
     await setCachedRules(storageApi, rules);
-    return rules;
+    return { ...rules, synced: false, merged: false };
   }
 }
