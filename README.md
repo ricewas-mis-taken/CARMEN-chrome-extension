@@ -64,9 +64,11 @@ cp core/*.js firefox/core/
 The desktop app's local Flask API (`http://127.0.0.1:5847`) is the single source of truth for the saved domain whitelist — the same one you edit in the popup's "Websites" box before starting a session:
 
 - `GET /api/focus/rules` returns `{ domainWhitelist, version, updatedAt }`.
-- `POST /api/focus/rules` accepts `{ domainWhitelist: [...] }`, persists it, and bumps `version`/`updatedAt`.
+- `POST /api/focus/rules` accepts `{ domainWhitelist: [...], baseVersion }`, persists it, and bumps `version`/`updatedAt`.
 
 Every browser instance (`core/rules-client.js`, loaded by each variant's `background.js`) polls `GET /api/focus/rules` every 7 seconds (`core/constants.js`'s `POLL_INTERVAL_MS`) and only touches its local cache when `version`/`updatedAt` actually changed — so five profiles polling at once don't do five times the work of comparing full lists. Saving an edit in any popup calls `POST /api/focus/rules`, so every other profile/browser picks it up on its next poll.
+
+**Conflicting edits merge instead of clobbering**: every push sends `baseVersion` — the `version` this profile's cache was on when the edit was made. If it still matches the server's current version (the common case), the push replaces the list outright, so a plain add-or-remove-then-save propagates exactly as edited, deletions included. If it's stale — another profile/Edge/Firefox instance pushed a change this one never polled — the server merges instead: union of the current list and the incoming one, deduped case-insensitively, so the other instance's edit isn't silently erased. A merge can't tell "this profile deleted a domain" apart from "this profile's view never had it," so a *conflicting* push can only grow the list; a non-conflicting push is still how a domain actually gets removed. See `carmen-desktop`'s `config.set_focus_rules()`.
 
 **Polling, not push**: this is the agreed v1 approach — see the `// TODO: consider SSE if polling delay becomes noticeable` in `core/rules-client.js` for the explicitly-deferred alternative. Don't add SSE/WebSocket push without revisiting that decision.
 

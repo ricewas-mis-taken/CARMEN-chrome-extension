@@ -95,16 +95,24 @@ export function startPolling({
 // server's response straight into the cache -- that response carries the
 // authoritative version/updatedAt the server just assigned, which will
 // always be newer than anything a subsequent poll could race it with.
+//
+// Sends this profile's cached version as baseVersion so the server can
+// tell a plain edit (nobody else changed anything since this profile last
+// saw it -- replace outright, so deletions work normally) apart from a
+// conflicting one (another instance pushed a change this profile never
+// polled -- merge instead of silently dropping that other edit). See
+// carmen-desktop's config.set_focus_rules() for the merge behavior.
 export async function pushRules({
   storageApi,
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
 }) {
+  const cached = await getCachedRules(storageApi);
   const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ domainWhitelist }),
+    body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
   });
   if (!res.ok) {
     throw new Error(`POST ${FOCUS_RULES_PATH} responded with ${res.status}`);
@@ -117,7 +125,7 @@ export async function pushRules({
     updatedAt: remote.updatedAt,
   };
   await setCachedRules(storageApi, rules);
-  return rules;
+  return { ...rules, merged: !!remote.merged };
 }
 
 // Convenience wrapper for UI call sites (chrome/popup/popup.js,
