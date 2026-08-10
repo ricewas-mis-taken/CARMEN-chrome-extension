@@ -38,6 +38,9 @@ const addSiteSubmitBtn = document.getElementById("add-site-submit-btn");
 const addSiteStatusEl = document.getElementById("add-site-status");
 
 const reviewAdditionsBtn = document.getElementById("review-additions-btn");
+const saveWhitelistBtn = document.getElementById("save-whitelist-btn");
+const saveWhitelistStatusEl = document.getElementById("save-whitelist-status");
+const setupViewLogBtn = document.getElementById("setup-view-log-btn");
 
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 
@@ -86,6 +89,34 @@ reviewAdditionsBtn.addEventListener("click", async () => {
 });
 
 refreshReviewAdditionsButton();
+
+let saveWhitelistStatusTimeout = null;
+
+// Lets you edit the saved whitelist (add or remove sites) and have it sync
+// to every other profile/browser without starting a session -- previously
+// the only way to persist an edit was via "Start Focus Session" itself.
+saveWhitelistBtn.addEventListener("click", async () => {
+  await whitelistLoaded;
+  saveWhitelistBtn.disabled = true;
+  saveWhitelistStatusEl.textContent = "Saving…";
+  const result = await saveWhitelist({
+    storageApi: chrome.storage.local,
+    domainWhitelist: parseLines(whitelistTextarea.value),
+  });
+  if (!result.synced) {
+    saveWhitelistStatusEl.textContent = "Saved to this device — will sync once the desktop app is reachable.";
+  } else if (result.merged) {
+    saveWhitelistStatusEl.textContent = "Saved (merged with a change from another device).";
+  } else {
+    saveWhitelistStatusEl.textContent = "Saved.";
+  }
+  saveWhitelistBtn.disabled = false;
+  refreshReviewAdditionsButton();
+  clearTimeout(saveWhitelistStatusTimeout);
+  saveWhitelistStatusTimeout = setTimeout(() => {
+    saveWhitelistStatusEl.textContent = "";
+  }, 3000);
+});
 
 let selectedMinutes = null;
 let selectedLockMode = "soft";
@@ -215,6 +246,10 @@ pauseBtn.addEventListener("click", () => {
 });
 
 viewLogBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("log/log.html") });
+});
+
+setupViewLogBtn.addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("log/log.html") });
 });
 
