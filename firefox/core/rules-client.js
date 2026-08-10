@@ -119,3 +119,33 @@ export async function pushRules({
   await setCachedRules(storageApi, rules);
   return rules;
 }
+
+// Convenience wrapper for UI call sites (chrome/popup/popup.js,
+// chrome/additions/additions.js, and their firefox/ counterparts) that just
+// want "save this edited whitelist" without handling the desktop-
+// unreachable case themselves. Tries pushRules(); if that fails, saves the
+// edit to this profile's own cache only (so the user's edit isn't lost/
+// reverted in the UI they're looking at right now) without bumping
+// version/updatedAt, since this profile didn't actually get a server-
+// assigned version for it. The next successful poll or push (from this
+// profile or another) reconciles it -- see the version-compare note in
+// pollOnce() above.
+export async function saveWhitelist({
+  storageApi,
+  fetchImpl = fetch,
+  apiBase = API_BASE,
+  domainWhitelist,
+}) {
+  try {
+    return await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist });
+  } catch (err) {
+    console.warn(
+      "CARMEN: could not sync whitelist edit to desktop app, saved to this profile only.",
+      err
+    );
+    const cached = await getCachedRules(storageApi);
+    const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt };
+    await setCachedRules(storageApi, rules);
+    return rules;
+  }
+}
