@@ -266,16 +266,21 @@ function isWhitelisted(url, whitelist) {
   });
 }
 
-// Hard lock never opens a new tab to a whitelisted domain -- an earlier
+// Hard lock never opens a whitelisted domain in a new tab -- an earlier
 // version did (see git history), and any whitelist entry that's a
 // redirect-prone URL (a marketing/landing page, not the real app) could
 // turn that into an infinite loop: open it, it redirects off-whitelist,
 // that reads as a fresh violation on the tab that redirect just landed in,
-// so hard lock opens it again, forever. Sending the offending tab to the
-// browser's own new-tab/homepage page instead is inherently safe: it can
-// never itself be a violation (doesn't match /^https?:\/\//), so it can't
-// re-trigger hard lock, and it doesn't touch any other tab -- which
-// matters for tab groups, see the collapsed-group filtering below.
+// so hard lock opens it again, forever. It also never rewrites the
+// offending tab's own URL (an even earlier version briefly did that
+// instead of opening a new tab) -- hard lock only ever changes which tab
+// is *focused*, never the content of the tab someone was actually on, so
+// opening a new tab to the homepage is always the fallback when no other
+// whitelisted tab is already open. The homepage is inherently safe to
+// open this way: it can never itself be a violation (doesn't match
+// /^https?:\/\//), so it can't re-trigger hard lock -- and it doesn't
+// touch any other tab, which matters for tab groups, see the
+// collapsed-group filtering below.
 const HOMEPAGE_URL = "chrome://newtab/";
 
 function formatTimeRemaining(endTime) {
@@ -512,35 +517,20 @@ async function handleTabUrl(tabId, url) {
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
-          // No other visible, already-open whitelisted tab -- send this
-          // tab to the browser's own homepage rather than opening
-          // anything. See HOMEPAGE_URL above for why.
-          await chrome.tabs.update(tabId, { url: HOMEPAGE_URL });
-          lastAcceptableUrl = "";
-          // Unlike the regulatedTab branch above (which leaves the
-          // offending tab exactly where it was, just unfocused), this
-          // actually navigates it off the violating URL -- so treat the
-          // violation as resolved the same way reaching a whitelisted URL
-          // does, and clear the dedup entry so revisiting the same URL in
-          // this same tab later is evaluated fresh instead of silently
-          // ignored (onUpdated firing again with this tab's URL unchanged
-          // from what lastHandledUrlByTab already has recorded).
-          lastHandledUrlByTab.delete(tabId);
-          const hadOpenViolation = openViolationTabs.delete(tabId);
-          if (hadOpenViolation && session.source !== "browser-only") {
-            try {
-              await apiFetch("/violation/resolved", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ type: "domain" }),
-              });
-            } catch (err) {
-              console.warn(
-                "CARMEN: could not report violation resolution to desktop app.",
-                err
-              );
-            }
-          }
+          // No other visible, already-open whitelisted tab -- open a new
+          // tab to the browser's own homepage instead, and leave this tab
+          // exactly where it was, same as the regulatedTab branch above.
+          // The offending tab's own URL is never touched by hard lock --
+          // only which tab is focused -- so it keeps sitting on the
+          // violating page in the background, unresolved, exactly like
+          // switching to a regulated tab does. See HOMEPAGE_URL above for
+          // why the homepage specifically is always safe to open.
+          await chrome.tabs.create({
+            url: HOMEPAGE_URL,
+            active: true,
+            windowId: currentTab.windowId,
+          });
+          lastAcceptableUrl = HOMEPAGE_URL;
         }
       };
 
