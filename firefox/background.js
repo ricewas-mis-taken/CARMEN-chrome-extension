@@ -953,7 +953,22 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
         });
-        await recordSessionAddition(domain.trim(), reason.trim());
+        // Only "manual" sessions actually run on the saved/master
+        // whitelist -- task, review, and calendar-event sessions each run
+        // on their own custom list (a task's domainWhitelist, a calendar
+        // event's per-event override, ...), scoped to that specific
+        // task/event and unrelated to everyone else's general focus
+        // sessions. Recording those additions here would surface them in
+        // the popup's "Add sites from last session" prompt as if they
+        // belonged in the master list, when they were only ever relevant
+        // to that one task/event. They're still fully logged server-side
+        // either way (session_manager's domainWhitelistAdditions) -- this
+        // only controls whether they get offered for folding into the
+        // shared list.
+        const session = await getSession();
+        if (session.source === "manual") {
+          await recordSessionAddition(domain.trim(), reason.trim());
+        }
         await recheckAllActiveTabs();
 
         sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
