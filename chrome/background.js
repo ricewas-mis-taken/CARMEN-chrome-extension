@@ -377,6 +377,44 @@ function getHostname(url) {
   }
 }
 
+// storage.local key for the popup's "Allow this site?" banner (see
+// popup.js's checkAllowSuggestion) -- whichever domain hard lock most
+// recently redirected away from or closed, and when, so the popup can
+// offer a one-click shortcut into the existing "Add a site" reason-prompt
+// flow instead of having to retype the domain manually.
+const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
+const PENDING_ALLOW_WINDOW_MS = 32000;
+
+// Strips to the base two-label domain (e.g. "old.reddit.com" ->
+// "reddit.com") rather than the exact hostname that triggered hard lock,
+// so allowing it via the banner covers every subdomain through
+// isWhitelisted's existing hostname.endsWith(".domain") match, not just
+// the one subdomain that happened to redirect. Doesn't handle multi-part
+// public suffixes (co.uk, github.io, ...) correctly -- a known
+// simplification, not a real concern for this single-user tool's own
+// domain list.
+function getBaseDomain(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const labels = hostname.split(".");
+    return labels.length <= 2 ? hostname : labels.slice(-2).join(".");
+  } catch (err) {
+    return null;
+  }
+}
+
+// Called once per hard-lock enforcement (see the top of the "hard" branch
+// in handleTabUrl below) -- a fresh redirect/close always overwrites
+// whatever was pending rather than stacking, so the banner only ever
+// offers the newest domain and its own 32s window restarts.
+async function recordPendingAllowSuggestion(url) {
+  const domain = getBaseDomain(url);
+  if (!domain) return;
+  await chrome.storage.local.set({
+    [PENDING_ALLOW_KEY]: { domain, redirectedAt: Date.now() },
+  });
+}
+
 async function handleTabUrl(tabId, url) {
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (lastHandledUrlByTab.get(tabId) === url) return;
@@ -437,6 +475,7 @@ async function handleTabUrl(tabId, url) {
   if (!currentTab.active) return;
 
   if (session.lockMode === "hard") {
+    await recordPendingAllowSuggestion(url);
     const isDragLockError = (err) => /may be dragging a tab/i.test(err?.message || "");
 
     try {
