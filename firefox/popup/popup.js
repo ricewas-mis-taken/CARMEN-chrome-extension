@@ -37,12 +37,19 @@ const addSiteCancelBtn = document.getElementById("add-site-cancel-btn");
 const addSiteSubmitBtn = document.getElementById("add-site-submit-btn");
 const addSiteStatusEl = document.getElementById("add-site-status");
 
+const allowSuggestionBannerEl = document.getElementById("allow-suggestion-banner");
+const allowSuggestionTextEl = document.getElementById("allow-suggestion-text");
+const allowSuggestionYesBtn = document.getElementById("allow-suggestion-yes-btn");
+const allowSuggestionDismissBtn = document.getElementById("allow-suggestion-dismiss-btn");
+
 const reviewAdditionsBtn = document.getElementById("review-additions-btn");
 const saveWhitelistBtn = document.getElementById("save-whitelist-btn");
 const saveWhitelistStatusEl = document.getElementById("save-whitelist-status");
 const setupViewLogBtn = document.getElementById("setup-view-log-btn");
 
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
+const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
+const PENDING_ALLOW_WINDOW_MS = 32000;
 
 const parseLines = (value) =>
   value
@@ -301,6 +308,7 @@ addSiteSubmitBtn.addEventListener("click", async () => {
   if (response?.ok) {
     addSiteStatusEl.textContent = `Added ${domain}.`;
     resetAddSiteForm();
+    browser.storage.local.remove(PENDING_ALLOW_KEY);
     refreshStatus();
   } else {
     addSiteStatusEl.textContent = "Couldn't add site — desktop app unreachable.";
@@ -410,9 +418,58 @@ function stopStatusPoll() {
   }
 }
 
+// background.js records the domain hard lock most recently redirected
+// away from or closed (see recordPendingAllowSuggestion there), refreshed
+// -- not stacked -- by each new one. Offers a one-click shortcut into the
+// existing "Add a site" reason-prompt flow instead of retyping the domain,
+// but only for PENDING_ALLOW_WINDOW_MS after the redirect/close, and only
+// while a session is actually active (the reason-prompt flow requires
+// one). Re-run on every 3s status poll, so it naturally disappears once
+// the window elapses even if the popup stays open the whole time.
+async function checkAllowSuggestion(session) {
+  if (!session?.isActive) {
+    allowSuggestionBannerEl.classList.add("hidden");
+    return;
+  }
+  const data = await browser.storage.local.get(PENDING_ALLOW_KEY);
+  const pending = data[PENDING_ALLOW_KEY];
+  if (!pending || Date.now() - pending.redirectedAt > PENDING_ALLOW_WINDOW_MS) {
+    allowSuggestionBannerEl.classList.add("hidden");
+    return;
+  }
+  const alreadyAllowed = (session.domainWhitelist || []).some(
+    (d) => (d || "").trim().toLowerCase() === pending.domain
+  );
+  if (alreadyAllowed) {
+    allowSuggestionBannerEl.classList.add("hidden");
+    return;
+  }
+  allowSuggestionTextEl.textContent = `Allow ${pending.domain}?`;
+  allowSuggestionBannerEl.dataset.domain = pending.domain;
+  allowSuggestionBannerEl.classList.remove("hidden");
+}
+
+allowSuggestionYesBtn.addEventListener("click", () => {
+  const domain = allowSuggestionBannerEl.dataset.domain;
+  allowSuggestionBannerEl.classList.add("hidden");
+  if (!domain) return;
+  // Reuses the existing "Add a site" flow (input + required reason,
+  // logged as a normal mid-session addition) instead of duplicating it --
+  // just prefills the domain and triggers it the same way clicking "Add"
+  // would.
+  addSiteInput.value = domain;
+  addSiteBtn.click();
+});
+
+allowSuggestionDismissBtn.addEventListener("click", async () => {
+  allowSuggestionBannerEl.classList.add("hidden");
+  await browser.storage.local.remove(PENDING_ALLOW_KEY);
+});
+
 async function refreshStatus() {
   const response = await browser.runtime.sendMessage({ type: "getStatus" });
   const session = response?.session;
+  checkAllowSuggestion(session);
   if (session?.isActive) {
     renderActiveSession(session);
   } else {

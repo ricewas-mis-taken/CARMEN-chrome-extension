@@ -276,6 +276,38 @@ textarea#whitelist:focus {
   white-space: nowrap;
 }
 
+.allow-suggestion-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -4px -4px 14px;
+  padding: 10px 12px;
+  background: #eef6f4;
+  border: 1px solid #9fd4cb;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #1f2933;
+}
+
+.allow-suggestion-banner #allow-suggestion-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.allow-suggestion-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.allow-suggestion-actions .secondary-btn,
+.allow-suggestion-actions .ghost-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .browser-only-row {
   display: flex;
   align-items: center;
