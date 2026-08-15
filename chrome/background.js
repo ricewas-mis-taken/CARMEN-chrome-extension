@@ -128,6 +128,45 @@ function computeActiveElapsedMs(startedAt, events) {
 }
 
 async function getSession() {
+  // A browser-only session, once started, must keep being enforced from
+  // local state for its whole duration regardless of what the desktop API
+  // says -- checked first, same precedence every other handler in this
+  // file already uses (endSession/pauseSession/resumeSession/
+  // addWhitelistDomain all check local.isActive before ever calling the
+  // desktop API). This function used to only consult the local session
+  // inside the desktop fetch's catch block, i.e. only while the desktop
+  // app was actually unreachable -- if it came back online (or simply had
+  // no session of its own running) while a browser-only session was still
+  // counting down, the next status check would see the desktop's
+  // isActive: false and silently drop all enforcement (soft/hard lock,
+  // violation reporting) and status display for the local session that
+  // was still legitimately running, with chrome.alarms the only thing
+  // still ticking toward its eventual end.
+  const local = await getLocalSession();
+  if (local.isActive) {
+    const startedAt = local.startedAt || null;
+    const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
+    return {
+      isActive: true,
+      isPaused: local.isPaused,
+      endTime: local.endTime,
+      startedAt,
+      activeElapsedMs,
+      lockMode: local.lockMode,
+      domainWhitelist: local.domainWhitelist,
+      processWhitelist: [],
+      violationCount: local.violationCount,
+      violationLog: [],
+      lastAcceptableUrl,
+      source: "browser-only",
+      eventId: null,
+      eventTitle: null,
+      reviewProblemName: null,
+      reviewSubjectName: null,
+      desktopReachable: false,
+    };
+  }
+
   try {
     const data = await apiFetch("/status", { method: "GET" });
     const isActive = !!data.isActive;
@@ -157,34 +196,10 @@ async function getSession() {
     console.warn(
       "CARMEN: could not reach desktop app at",
       API_BASE,
-      "- checking for a browser-only session instead.",
+      "- no browser-only session either.",
       err
     );
-    const local = await getLocalSession();
-    if (!local.isActive) {
-      return { ...defaultSession(), desktopReachable: false };
-    }
-    const startedAt = local.startedAt || null;
-    const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
-    return {
-      isActive: true,
-      isPaused: local.isPaused,
-      endTime: local.endTime,
-      startedAt,
-      activeElapsedMs,
-      lockMode: local.lockMode,
-      domainWhitelist: local.domainWhitelist,
-      processWhitelist: [],
-      violationCount: local.violationCount,
-      violationLog: [],
-      lastAcceptableUrl,
-      source: "browser-only",
-      eventId: null,
-      eventTitle: null,
-      reviewProblemName: null,
-      reviewSubjectName: null,
-      desktopReachable: false,
-    };
+    return { ...defaultSession(), desktopReachable: false };
   }
 }
 
@@ -251,18 +266,38 @@ function isWhitelisted(url, whitelist) {
     return false;
   }
   const hostname = parsed.hostname.toLowerCase();
-  const originAndPath = (parsed.origin + parsed.pathname).toLowerCase();
+  const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
     const trimmed = (entry || "").trim().toLowerCase();
     if (!trimmed) return false;
     const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
-    if (!withoutProtocol.includes("/")) {
+    const slashIndex = withoutProtocol.indexOf("/");
+    if (slashIndex === -1) {
       return equivalentHostnames(withoutProtocol).some(
         (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
       );
     }
-    return originAndPath.includes(withoutProtocol);
+    // Path-scoped entry (e.g. "docs.google.com/document") -- the hostname
+    // portion must match exactly the same way a bare-domain entry does
+    // (equivalents included), and the path portion must match at a path
+    // boundary, not just appear anywhere in origin+pathname. An earlier
+    // version checked `originAndPath.includes(withoutProtocol)`, an
+    // unanchored substring test: any URL whose *path* happened to contain
+    // the whitelisted domain+path string -- trivially achievable on any
+    // domain the attacker controls, e.g.
+    // "https://evil.example.com/x/docs.google.com/document/y" -- matched
+    // regardless of its actual hostname. Anchoring the hostname check the
+    // same way the no-slash branch does closes that; the boundary check on
+    // the path prevents "/document" from also matching "/documentXYZ".
+    const entryDomain = withoutProtocol.slice(0, slashIndex);
+    const entryPath = withoutProtocol.slice(slashIndex);
+    const hostnameMatches = equivalentHostnames(entryDomain).some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+    if (!hostnameMatches) return false;
+    const boundary = entryPath.endsWith("/") ? entryPath : `${entryPath}/`;
+    return pathname === entryPath || pathname.startsWith(boundary);
   });
 }
 
@@ -454,10 +489,21 @@ async function handleTabUrl(tabId, url) {
   if (!openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
     if (session.source === "browser-only") {
-      const local = await getLocalSession();
-      if (local.isActive) {
-        await setLocalSession({ ...local, violationCount: (local.violationCount || 0) + 1 });
-      }
+      // Unlike recordSessionAddition/resetSessionAdditions, this used to
+      // be a plain unlocked read-modify-write -- two tabs violating
+      // around the same tick (e.g. two background tabs both onUpdated to
+      // a non-whitelisted URL close together), or this racing a
+      // pause/resume click's own local-session write, could interleave:
+      // both read the same local object, both write back, and whichever
+      // finishes last silently clobbers the other's field. Routed through
+      // the same storage lock every other local-session read-modify-write
+      // in this file uses for exactly this reason.
+      await withStorageLock(async () => {
+        const local = await getLocalSession();
+        if (local.isActive) {
+          await setLocalSession({ ...local, violationCount: (local.violationCount || 0) + 1 });
+        }
+      });
     } else {
       try {
         await apiFetch("/violation", {
@@ -777,6 +823,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        // Not cleared previously -- a tab that stayed parked on the same
+        // non-whitelisted domain across two sessions (e.g. the first
+        // session ends and a new one starts minutes later without the tab
+        // changing) would carry over: overlayDomainByTab would still
+        // think it already showed that hostname's soft-lock overlay (so
+        // the *only* enforcement action a soft-lock session takes would
+        // silently not fire, even though the violation is still logged
+        // server-side), and switchAwayAttemptsByTab could already be at
+        // MAX_SWITCH_AWAY_ATTEMPTS from the previous session's hard lock,
+        // force-closing the tab on its very first violation in the new
+        // session instead of the normal 3-strikes grace period.
+        overlayDomainByTab.clear();
+        switchAwayAttemptsByTab.clear();
         await resetSessionAdditions();
         const endTime =
           typeof data.secondsRemaining === "number"
@@ -813,6 +872,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        // Not cleared previously -- a tab that stayed parked on the same
+        // non-whitelisted domain across two sessions (e.g. the first
+        // session ends and a new one starts minutes later without the tab
+        // changing) would carry over: overlayDomainByTab would still
+        // think it already showed that hostname's soft-lock overlay (so
+        // the *only* enforcement action a soft-lock session takes would
+        // silently not fire, even though the violation is still logged
+        // server-side), and switchAwayAttemptsByTab could already be at
+        // MAX_SWITCH_AWAY_ATTEMPTS from the previous session's hard lock,
+        // force-closing the tab on its very first violation in the new
+        // session instead of the normal 3-strikes grace period.
+        overlayDomainByTab.clear();
+        switchAwayAttemptsByTab.clear();
         await resetSessionAdditions();
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
@@ -852,11 +924,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "pauseSession") {
     (async () => {
-      const local = await getLocalSession();
-      if (local.isActive) {
+      // Locked so this can't interleave with the violationCount
+      // read-modify-write above (or with resumeSession below) -- see the
+      // comment on that one for the failure mode.
+      const wasLocalActive = await withStorageLock(async () => {
+        const local = await getLocalSession();
+        if (!local.isActive) return false;
         const remainingMs = Math.max(0, local.endTime - Date.now());
         const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
+        return true;
+      });
+      if (wasLocalActive) {
         await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
         return;
@@ -876,12 +955,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "resumeSession") {
     (async () => {
-      const local = await getLocalSession();
-      if (local.isActive) {
+      // Locked for the same reason pauseSession's local-session write is.
+      const resumedEndTime = await withStorageLock(async () => {
+        const local = await getLocalSession();
+        if (!local.isActive) return null;
         const endTime = Date.now() + local.pausedRemainingMs;
         const pauseEvents = [...(local.pauseEvents || []), { kind: "resume", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0, pauseEvents });
-        chrome.alarms.create(ALARM_NAME, { when: endTime });
+        return endTime;
+      });
+      if (resumedEndTime !== null) {
+        chrome.alarms.create(ALARM_NAME, { when: resumedEndTime });
         lastHandledUrlByTab.clear();
         await recheckAllActiveTabs();
         sendResponse({ ok: true });

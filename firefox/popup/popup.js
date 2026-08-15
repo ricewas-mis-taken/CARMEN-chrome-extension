@@ -471,6 +471,22 @@ async function refreshStatus() {
   const session = response?.session;
   checkAllowSuggestion(session);
   if (session?.isActive) {
+    // Arms polling here rather than unconditionally at the bottom of this
+    // file -- refreshStatus() is async, so a plain "refreshStatus();
+    // setInterval(refreshStatus, 3000)" pair races: the interval gets
+    // created before this first call resolves, and if no session is
+    // active yet (the common case when the popup just opened), the
+    // else-branch below calls stopStatusPoll() and kills that interval
+    // for good -- nothing else ever called setInterval again, so starting
+    // a session from that same popup instance would leave violation
+    // count, pause state, the connection badge, and the "Allow site?"
+    // banner frozen at whatever they were the moment the session started.
+    // Arming it here instead means any refreshStatus() call that finds an
+    // active session guarantees polling is running, regardless of what
+    // order things happened in.
+    if (!statusPollInterval) {
+      statusPollInterval = setInterval(refreshStatus, 3000);
+    }
     renderActiveSession(session);
   } else {
     stopStatusPoll();
@@ -480,4 +496,3 @@ async function refreshStatus() {
 }
 
 refreshStatus();
-statusPollInterval = setInterval(refreshStatus, 3000);
