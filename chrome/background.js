@@ -540,9 +540,22 @@ async function handleTabUrl(tabId, url) {
         isWhitelisted(t.url, session.domainWhitelist) &&
         !(t.groupId !== undefined && t.groupId !== NO_GROUP && collapsedGroupIds.has(t.groupId));
 
+      // Lower-priority than a real whitelisted tab, but checked before
+      // falling back to chrome.tabs.create -- an earlier version always
+      // opened a brand new homepage tab whenever no whitelisted tab was
+      // open, even if a *previous* redirect had already left one sitting
+      // right there unused. Repeated violations with nothing whitelisted
+      // open (the common case: user keeps trying off-task sites) piled up
+      // one blank tab per redirect instead of just reusing the one already
+      // open. Not filtered by collapsed-group the way isCandidate is --
+      // it's always our own tab, never one the user grouped themselves.
+      const isExistingHomepageTab = (t) => t.id !== tabId && t.url === HOMEPAGE_URL;
+
       const regulatedTab =
         tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isCandidate);
+        tabs.find(isCandidate) ||
+        tabs.find((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId) ||
+        tabs.find(isExistingHomepageTab);
 
       if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
         switchAwayAttemptsByTab.delete(tabId);
@@ -563,14 +576,16 @@ async function handleTabUrl(tabId, url) {
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
-          // No other visible, already-open whitelisted tab -- open a new
-          // tab to the browser's own homepage instead, and leave this tab
-          // exactly where it was, same as the regulatedTab branch above.
-          // The offending tab's own URL is never touched by hard lock --
-          // only which tab is focused -- so it keeps sitting on the
-          // violating page in the background, unresolved, exactly like
-          // switching to a regulated tab does. See HOMEPAGE_URL above for
-          // why the homepage specifically is always safe to open.
+          // No other visible, already-open whitelisted tab, and no
+          // already-open homepage tab from a previous redirect either
+          // (regulatedTab's own fallback search above would have caught
+          // one) -- open a fresh homepage tab, and leave this tab exactly
+          // where it was, same as the regulatedTab branch above. The
+          // offending tab's own URL is never touched by hard lock -- only
+          // which tab is focused -- so it keeps sitting on the violating
+          // page in the background, unresolved, exactly like switching to
+          // a regulated tab does. See HOMEPAGE_URL above for why the
+          // homepage specifically is always safe to open.
           await chrome.tabs.create({
             url: HOMEPAGE_URL,
             active: true,
