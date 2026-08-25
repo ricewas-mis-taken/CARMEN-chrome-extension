@@ -425,19 +425,42 @@ function getHostname(url) {
 const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
 const PENDING_ALLOW_WINDOW_MS = 32000;
 
+// Apex domains that host many unrelated products under the same two-label
+// root -- getBaseDomain's usual "strip to the base domain" convenience
+// would be a real overreach for these specifically. Allowing "gmail.com"
+// (really mail.google.com) via the banner used to suggest whitelisting
+// bare "google.com", which then also unlocks Docs, Drive, Search, Maps,
+// Photos, Translate, and everything else under *.google.com through
+// isWhitelisted's own hostname.endsWith(".domain") match -- nothing about
+// wanting Gmail implies wanting the rest of Google. Same story for
+// Microsoft (Outlook vs. Bing/Xbox/Azure), Amazon (shopping vs. AWS
+// console), Apple, and Yahoo. Extend this list if another multi-product
+// domain shows up in practice.
+const MULTI_SERVICE_APEX_DOMAINS = new Set([
+  "google.com",
+  "microsoft.com",
+  "amazon.com",
+  "apple.com",
+  "yahoo.com",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
 // isWhitelisted's existing hostname.endsWith(".domain") match, not just
-// the one subdomain that happened to redirect. Doesn't handle multi-part
-// public suffixes (co.uk, github.io, ...) correctly -- a known
-// simplification, not a real concern for this single-user tool's own
-// domain list.
+// the one subdomain that happened to redirect -- EXCEPT for
+// MULTI_SERVICE_APEX_DOMAINS above, where that same convenience would
+// grant far more than intended; those keep the exact hostname that
+// actually redirected. Doesn't handle multi-part public suffixes (co.uk,
+// github.io, ...) correctly -- a known simplification, not a real concern
+// for this single-user tool's own domain list.
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     const labels = hostname.split(".");
-    return labels.length <= 2 ? hostname : labels.slice(-2).join(".");
+    if (labels.length <= 2) return hostname;
+    const apex = labels.slice(-2).join(".");
+    return MULTI_SERVICE_APEX_DOMAINS.has(apex) ? hostname : apex;
   } catch (err) {
     return null;
   }
