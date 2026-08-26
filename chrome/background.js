@@ -425,19 +425,42 @@ function getHostname(url) {
 const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
 const PENDING_ALLOW_WINDOW_MS = 32000;
 
+// Apex domains that host many unrelated products under the same two-label
+// root -- getBaseDomain's usual "strip to the base domain" convenience
+// would be a real overreach for these specifically. Allowing "gmail.com"
+// (really mail.google.com) via the banner used to suggest whitelisting
+// bare "google.com", which then also unlocks Docs, Drive, Search, Maps,
+// Photos, Translate, and everything else under *.google.com through
+// isWhitelisted's own hostname.endsWith(".domain") match -- nothing about
+// wanting Gmail implies wanting the rest of Google. Same story for
+// Microsoft (Outlook vs. Bing/Xbox/Azure), Amazon (shopping vs. AWS
+// console), Apple, and Yahoo. Extend this list if another multi-product
+// domain shows up in practice.
+const MULTI_SERVICE_APEX_DOMAINS = new Set([
+  "google.com",
+  "microsoft.com",
+  "amazon.com",
+  "apple.com",
+  "yahoo.com",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
 // isWhitelisted's existing hostname.endsWith(".domain") match, not just
-// the one subdomain that happened to redirect. Doesn't handle multi-part
-// public suffixes (co.uk, github.io, ...) correctly -- a known
-// simplification, not a real concern for this single-user tool's own
-// domain list.
+// the one subdomain that happened to redirect -- EXCEPT for
+// MULTI_SERVICE_APEX_DOMAINS above, where that same convenience would
+// grant far more than intended; those keep the exact hostname that
+// actually redirected. Doesn't handle multi-part public suffixes (co.uk,
+// github.io, ...) correctly -- a known simplification, not a real concern
+// for this single-user tool's own domain list.
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     const labels = hostname.split(".");
-    return labels.length <= 2 ? hostname : labels.slice(-2).join(".");
+    if (labels.length <= 2) return hostname;
+    const apex = labels.slice(-2).join(".");
+    return MULTI_SERVICE_APEX_DOMAINS.has(apex) ? hostname : apex;
   } catch (err) {
     return null;
   }
@@ -540,9 +563,22 @@ async function handleTabUrl(tabId, url) {
         isWhitelisted(t.url, session.domainWhitelist) &&
         !(t.groupId !== undefined && t.groupId !== NO_GROUP && collapsedGroupIds.has(t.groupId));
 
+      // Lower-priority than a real whitelisted tab, but checked before
+      // falling back to chrome.tabs.create -- an earlier version always
+      // opened a brand new homepage tab whenever no whitelisted tab was
+      // open, even if a *previous* redirect had already left one sitting
+      // right there unused. Repeated violations with nothing whitelisted
+      // open (the common case: user keeps trying off-task sites) piled up
+      // one blank tab per redirect instead of just reusing the one already
+      // open. Not filtered by collapsed-group the way isCandidate is --
+      // it's always our own tab, never one the user grouped themselves.
+      const isExistingHomepageTab = (t) => t.id !== tabId && t.url === HOMEPAGE_URL;
+
       const regulatedTab =
         tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isCandidate);
+        tabs.find(isCandidate) ||
+        tabs.find((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId) ||
+        tabs.find(isExistingHomepageTab);
 
       if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
         switchAwayAttemptsByTab.delete(tabId);
@@ -563,14 +599,16 @@ async function handleTabUrl(tabId, url) {
           }
           lastAcceptableUrl = regulatedTab.url;
         } else {
-          // No other visible, already-open whitelisted tab -- open a new
-          // tab to the browser's own homepage instead, and leave this tab
-          // exactly where it was, same as the regulatedTab branch above.
-          // The offending tab's own URL is never touched by hard lock --
-          // only which tab is focused -- so it keeps sitting on the
-          // violating page in the background, unresolved, exactly like
-          // switching to a regulated tab does. See HOMEPAGE_URL above for
-          // why the homepage specifically is always safe to open.
+          // No other visible, already-open whitelisted tab, and no
+          // already-open homepage tab from a previous redirect either
+          // (regulatedTab's own fallback search above would have caught
+          // one) -- open a fresh homepage tab, and leave this tab exactly
+          // where it was, same as the regulatedTab branch above. The
+          // offending tab's own URL is never touched by hard lock -- only
+          // which tab is focused -- so it keeps sitting on the violating
+          // page in the background, unresolved, exactly like switching to
+          // a regulated tab does. See HOMEPAGE_URL above for why the
+          // homepage specifically is always safe to open.
           await chrome.tabs.create({
             url: HOMEPAGE_URL,
             active: true,
