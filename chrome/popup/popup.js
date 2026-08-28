@@ -1,5 +1,6 @@
 import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
+import { getApiToken, setApiToken } from "../core/api-token.js";
 
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
@@ -46,6 +47,10 @@ const reviewAdditionsBtn = document.getElementById("review-additions-btn");
 const saveWhitelistBtn = document.getElementById("save-whitelist-btn");
 const saveWhitelistStatusEl = document.getElementById("save-whitelist-status");
 const setupViewLogBtn = document.getElementById("setup-view-log-btn");
+
+const apiTokenInput = document.getElementById("api-token-input");
+const saveApiTokenBtn = document.getElementById("save-api-token-btn");
+const apiTokenStatusEl = document.getElementById("api-token-status");
 
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
@@ -122,6 +127,31 @@ saveWhitelistBtn.addEventListener("click", async () => {
   clearTimeout(saveWhitelistStatusTimeout);
   saveWhitelistStatusTimeout = setTimeout(() => {
     saveWhitelistStatusEl.textContent = "";
+  }, 3000);
+});
+
+// Shown as a placeholder (never echoed back in full) once a token is
+// already saved, so re-opening the popup doesn't look like pairing was
+// lost -- but also doesn't put the real secret back in a plain, easily
+// screenshotted text field.
+getApiToken(chrome.storage.local).then((token) => {
+  if (token) {
+    apiTokenInput.placeholder = "Token saved (paste a new one to replace it)";
+  }
+});
+
+let apiTokenStatusTimeout = null;
+
+saveApiTokenBtn.addEventListener("click", async () => {
+  const value = apiTokenInput.value.trim();
+  if (!value) return;
+  await setApiToken(chrome.storage.local, value);
+  apiTokenInput.value = "";
+  apiTokenInput.placeholder = "Token saved (paste a new one to replace it)";
+  apiTokenStatusEl.textContent = "Saved.";
+  clearTimeout(apiTokenStatusTimeout);
+  apiTokenStatusTimeout = setTimeout(() => {
+    apiTokenStatusEl.textContent = "";
   }, 3000);
 });
 

@@ -18,6 +18,7 @@
 // polling is the agreed v1 approach -- see README.md.
 import { API_BASE, FOCUS_RULES_PATH, POLL_INTERVAL_MS } from "./constants.js";
 import { getCachedRules, setCachedRules, setConnectionStatus } from "./rules-cache.js";
+import { getApiToken } from "./api-token.js";
 
 async function fetchRules(fetchImpl, apiBase) {
   const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, { method: "GET" });
@@ -109,9 +110,10 @@ export async function pushRules({
   domainWhitelist,
 }) {
   const cached = await getCachedRules(storageApi);
+  const token = await getApiToken(storageApi);
   const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
     body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
   });
   if (!res.ok) {

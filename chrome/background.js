@@ -1,6 +1,7 @@
 import { startPolling } from "./core/rules-client.js";
 import { getConnectionStatus } from "./core/rules-cache.js";
 import { POLL_INTERVAL_MS } from "./core/constants.js";
+import { getApiToken } from "./core/api-token.js";
 
 const API_BASE = "http://127.0.0.1:5847";
 const ALARM_NAME = "focusSessionEnd";
@@ -29,7 +30,14 @@ function defaultSession() {
 let lastAcceptableUrl = "";
 
 async function apiFetch(path, options) {
-  const res = await fetch(`${API_BASE}${path}`, options);
+  // Every state-changing endpoint on the desktop side now requires this
+  // header (see carmen-desktop's api_server.py _require_token) -- attached
+  // here, once, rather than at each of this function's call sites. Read-only
+  // routes ignore an empty/wrong token, so it's safe to always send it even
+  // before this profile has been paired via the popup.
+  const token = await getApiToken(chrome.storage.local);
+  const headers = { ...(options && options.headers), "X-Carmen-Token": token };
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     throw new Error(`Desktop API ${path} responded with ${res.status}`);
   }
