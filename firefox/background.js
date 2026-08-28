@@ -451,23 +451,55 @@ const MULTI_SERVICE_APEX_DOMAINS = new Set([
   "yahoo.com",
 ]);
 
+// Multi-tenant hosting platforms where arbitrary third parties' sites live
+// under one shared two-label apex -- the same overreach problem
+// MULTI_SERVICE_APEX_DOMAINS above guards against, just via a shared HOST
+// instead of one company's own family of products. Without this, getting
+// redirected off e.g. "someones-blog.github.io" and accepting the banner's
+// suggestion would whitelist bare "github.io", silently allowing every
+// GitHub Pages site anyone controls. Extend if another shows up in
+// practice -- this list is not exhaustive of every public-suffix-like
+// hosting domain that exists, just the common ones.
+const MULTI_TENANT_HOST_SUFFIXES = new Set([
+  "github.io",
+  "gitlab.io",
+  "vercel.app",
+  "netlify.app",
+  "pages.dev",
+  "web.app",
+  "firebaseapp.com",
+  "herokuapp.com",
+  "repl.co",
+  "glitch.me",
+  "wordpress.com",
+  "blogspot.com",
+  "wixsite.com",
+  "notion.site",
+  "s3.amazonaws.com",
+  "googleusercontent.com",
+  "tumblr.com",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
 // isWhitelisted's existing hostname.endsWith(".domain") match, not just
 // the one subdomain that happened to redirect -- EXCEPT for
-// MULTI_SERVICE_APEX_DOMAINS above, where that same convenience would
-// grant far more than intended; those keep the exact hostname that
-// actually redirected. Doesn't handle multi-part public suffixes (co.uk,
-// github.io, ...) correctly -- a known simplification, not a real concern
-// for this single-user tool's own domain list.
+// MULTI_SERVICE_APEX_DOMAINS and MULTI_TENANT_HOST_SUFFIXES above, where
+// that same convenience would grant far more than intended; those keep the
+// exact hostname that actually redirected. Doesn't handle multi-part public
+// suffixes (co.uk, ...) beyond the ones listed above -- a known
+// simplification, not a real concern for this single-user tool's own domain list.
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     const labels = hostname.split(".");
     if (labels.length <= 2) return hostname;
     const apex = labels.slice(-2).join(".");
-    return MULTI_SERVICE_APEX_DOMAINS.has(apex) ? hostname : apex;
+    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || MULTI_TENANT_HOST_SUFFIXES.has(apex)) {
+      return hostname;
+    }
+    return apex;
   } catch (err) {
     return null;
   }
