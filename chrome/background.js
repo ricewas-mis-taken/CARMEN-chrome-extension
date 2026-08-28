@@ -1,6 +1,7 @@
 import { startPolling } from "./core/rules-client.js";
 import { getConnectionStatus } from "./core/rules-cache.js";
 import { POLL_INTERVAL_MS } from "./core/constants.js";
+import { getApiToken } from "./core/api-token.js";
 
 const API_BASE = "http://127.0.0.1:5847";
 const ALARM_NAME = "focusSessionEnd";
@@ -29,7 +30,14 @@ function defaultSession() {
 let lastAcceptableUrl = "";
 
 async function apiFetch(path, options) {
-  const res = await fetch(`${API_BASE}${path}`, options);
+  // Every state-changing endpoint on the desktop side now requires this
+  // header (see carmen-desktop's api_server.py _require_token) -- attached
+  // here, once, rather than at each of this function's call sites. Read-only
+  // routes ignore an empty/wrong token, so it's safe to always send it even
+  // before this profile has been paired via the popup.
+  const token = await getApiToken(chrome.storage.local);
+  const headers = { ...(options && options.headers), "X-Carmen-Token": token };
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     throw new Error(`Desktop API ${path} responded with ${res.status}`);
   }
@@ -225,26 +233,21 @@ async function removeTabVerified(tabId) {
   throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
 }
 
-async function removeWindowVerified(windowId) {
-  await chrome.windows.remove(windowId);
-  try {
-    await chrome.windows.get(windowId);
-  } catch (err) {
-    return;
-  }
-  throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
-}
-
 async function forceCloseTab(tabId) {
   try {
     await withDragRetry(() => removeTabVerified(tabId));
   } catch (err) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      await withDragRetry(() => removeWindowVerified(tab.windowId));
-    } catch (cleanupErr) {
-      console.error("CARMEN: could not force-close a stranded drag tab/window.", cleanupErr);
-    }
+    // This used to escalate to closing the entire window (chrome.windows.remove)
+    // when the tab itself kept failing to close -- meant as a last-resort
+    // cleanup, it instead closed every other tab in that window too,
+    // including unrelated, non-violating ones, whenever Chrome's "user may
+    // be dragging a tab" error outlasted the retry budget. Holding a mouse
+    // button down on the tab strip (the same "click and hold" gesture this
+    // extension's own UI uses elsewhere) is enough to trigger that error,
+    // so this was reachable from ordinary use, not just an edge case. Give
+    // up on closing this one tab for now instead -- the next
+    // navigation/activation event re-runs the same enforcement check.
+    console.error("CARMEN: could not force-close a stranded drag tab; leaving it for now.", err);
   }
 }
 
@@ -444,23 +447,55 @@ const MULTI_SERVICE_APEX_DOMAINS = new Set([
   "yahoo.com",
 ]);
 
+// Multi-tenant hosting platforms where arbitrary third parties' sites live
+// under one shared two-label apex -- the same overreach problem
+// MULTI_SERVICE_APEX_DOMAINS above guards against, just via a shared HOST
+// instead of one company's own family of products. Without this, getting
+// redirected off e.g. "someones-blog.github.io" and accepting the banner's
+// suggestion would whitelist bare "github.io", silently allowing every
+// GitHub Pages site anyone controls. Extend if another shows up in
+// practice -- this list is not exhaustive of every public-suffix-like
+// hosting domain that exists, just the common ones.
+const MULTI_TENANT_HOST_SUFFIXES = new Set([
+  "github.io",
+  "gitlab.io",
+  "vercel.app",
+  "netlify.app",
+  "pages.dev",
+  "web.app",
+  "firebaseapp.com",
+  "herokuapp.com",
+  "repl.co",
+  "glitch.me",
+  "wordpress.com",
+  "blogspot.com",
+  "wixsite.com",
+  "notion.site",
+  "s3.amazonaws.com",
+  "googleusercontent.com",
+  "tumblr.com",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
 // isWhitelisted's existing hostname.endsWith(".domain") match, not just
 // the one subdomain that happened to redirect -- EXCEPT for
-// MULTI_SERVICE_APEX_DOMAINS above, where that same convenience would
-// grant far more than intended; those keep the exact hostname that
-// actually redirected. Doesn't handle multi-part public suffixes (co.uk,
-// github.io, ...) correctly -- a known simplification, not a real concern
-// for this single-user tool's own domain list.
+// MULTI_SERVICE_APEX_DOMAINS and MULTI_TENANT_HOST_SUFFIXES above, where
+// that same convenience would grant far more than intended; those keep the
+// exact hostname that actually redirected. Doesn't handle multi-part public
+// suffixes (co.uk, ...) beyond the ones listed above -- a known
+// simplification, not a real concern for this single-user tool's own domain list.
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     const labels = hostname.split(".");
     if (labels.length <= 2) return hostname;
     const apex = labels.slice(-2).join(".");
-    return MULTI_SERVICE_APEX_DOMAINS.has(apex) ? hostname : apex;
+    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || MULTI_TENANT_HOST_SUFFIXES.has(apex)) {
+      return hostname;
+    }
+    return apex;
   } catch (err) {
     return null;
   }
