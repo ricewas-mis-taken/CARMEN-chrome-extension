@@ -232,26 +232,21 @@ async function removeTabVerified(tabId) {
   throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
 }
 
-async function removeWindowVerified(windowId) {
-  await browser.windows.remove(windowId);
-  try {
-    await browser.windows.get(windowId);
-  } catch (err) {
-    return;
-  }
-  throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
-}
-
 async function forceCloseTab(tabId) {
   try {
     await withDragRetry(() => removeTabVerified(tabId));
   } catch (err) {
-    try {
-      const tab = await browser.tabs.get(tabId);
-      await withDragRetry(() => removeWindowVerified(tab.windowId));
-    } catch (cleanupErr) {
-      console.error("CARMEN: could not force-close a stranded drag tab/window.", cleanupErr);
-    }
+    // This used to escalate to closing the entire window (browser.windows.remove)
+    // when the tab itself kept failing to close -- meant as a last-resort
+    // cleanup, it instead closed every other tab in that window too,
+    // including unrelated, non-violating ones, whenever the "user may be
+    // dragging a tab" error outlasted the retry budget. Holding a mouse
+    // button down on the tab strip (the same "click and hold" gesture this
+    // extension's own UI uses elsewhere) is enough to trigger that error,
+    // so this was reachable from ordinary use, not just an edge case. Give
+    // up on closing this one tab for now instead -- the next
+    // navigation/activation event re-runs the same enforcement check.
+    console.error("CARMEN: could not force-close a stranded drag tab; leaving it for now.", err);
   }
 }
 
