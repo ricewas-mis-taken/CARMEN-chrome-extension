@@ -375,10 +375,91 @@ async function notifySessionComplete() {
       message,
       silent: false,
     });
+
+    await maybeOfferToSaveDomains(lastEntry);
   } catch (err) {
     console.warn("CARMEN: could not build session-complete notification.", err);
   }
 }
+
+const SAVE_DOMAINS_PROMPT_KEY = "pendingDomainSavePrompt";
+const SAVE_DOMAINS_NOTIFICATION_PREFIX = "carmenSaveDomains:";
+
+// Offers to save sites allowed mid-session (via the "Allow this site?"
+// banner) onto the linked task's own saved domainWhitelist -- so the next
+// session started on this task already includes them, instead of the user
+// having to re-allow the same site every single time. Only offered for a
+// task/review session (lastEntry.eventId is the task's id in both cases --
+// see carmen-desktop's tasks_tab.py/review_tab.py) that actually had at
+// least one mid-session addition; a plain manual session has no task to
+// save onto, and a session with nothing added has nothing new to offer.
+//
+// Two prompt surfaces are shown at once -- a notification (works without
+// any tab open) and an on-page overlay on the current tab -- so it can be
+// judged which one reads better in practice; both lead to the same
+// applyPendingDomainSave() outcome and clear the other automatically.
+async function maybeOfferToSaveDomains(entry) {
+  if (!entry || !["task", "review"].includes(entry.source) || !entry.eventId) return;
+  const additions = Array.isArray(entry.domainWhitelistAdditions) ? entry.domainWhitelistAdditions : [];
+  const domains = [...new Set(additions.map((a) => a?.domain).filter(Boolean))];
+  if (domains.length === 0) return;
+
+  const taskId = entry.eventId;
+  const taskTitle = entry.eventTitle || "this task";
+  await chrome.storage.local.set({
+    [SAVE_DOMAINS_PROMPT_KEY]: { taskId, taskTitle, domains },
+  });
+
+  chrome.notifications.create(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${taskId}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icon128.png"),
+    title: `Save ${domains.length} site${domains.length === 1 ? "" : "s"} to "${taskTitle}"?`,
+    message: domains.join(", "),
+    buttons: [{ title: "Yes, save" }, { title: "No" }],
+    requireInteraction: true,
+  });
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tab?.id) {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content/overlay.js"] });
+      await chrome.tabs.sendMessage(tab.id, { type: "showSaveDomainsPrompt", taskTitle, domains });
+    }
+  } catch (err) {
+    console.warn("CARMEN: could not show the save-domains overlay prompt.", err);
+  }
+}
+
+// Applies whatever's currently pending (from either prompt surface) by
+// pushing it to the desktop app, then clears it either way -- accepted or
+// not, a stale pending entry must never get applied later by an unrelated
+// future click.
+async function applyPendingDomainSave() {
+  const { [SAVE_DOMAINS_PROMPT_KEY]: pending } = await chrome.storage.local.get(SAVE_DOMAINS_PROMPT_KEY);
+  if (!pending) return;
+  try {
+    await apiFetch(`/tasks/${encodeURIComponent(pending.taskId)}/domain-whitelist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domains: pending.domains }),
+    });
+  } catch (err) {
+    console.warn("CARMEN: could not save allowed sites to the task.", err);
+  } finally {
+    await chrome.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    chrome.notifications.clear(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${pending.taskId}`);
+  }
+}
+
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  if (!notificationId.startsWith(SAVE_DOMAINS_NOTIFICATION_PREFIX)) return;
+  chrome.notifications.clear(notificationId);
+  if (buttonIndex === 0) {
+    applyPendingDomainSave();
+  } else {
+    chrome.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+  }
+});
 
 const lastHandledUrlByTab = new Map();
 const overlayDomainByTab = new Map();
@@ -1126,6 +1207,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true, session });
     })();
     return true;
+  }
+
+  if (message?.type === "saveDomainsPromptResponse") {
+    if (message.accepted) {
+      applyPendingDomainSave();
+    } else {
+      chrome.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    }
+    return false;
   }
 
   if (message?.type === "getHistory") {
