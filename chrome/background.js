@@ -468,6 +468,33 @@ const openViolationTabs = new Set();
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
 
+// tabId -> Date.now() of the last time it became the active tab (see the
+// onActivated/onFocusChanged listeners below) -- lets hard lock's redirect
+// pick the most recently used eligible tab instead of whichever one
+// happens to come first in chrome.tabs.query({})'s arbitrary ordering (tab
+// creation order, not activity order). Resets on service worker restart
+// like every other in-memory map here -- worst case, the very next redirect
+// after a restart falls back to query order until tabs get activated again,
+// not "redirect breaks."
+const tabLastActiveAt = new Map();
+
+// Picks whichever of `tabs` was active most recently (falling back to the
+// first one if none of them have a recorded activation -- e.g. right after
+// a service worker restart, or tabs that were opened but never focused),
+// or null if `tabs` is empty.
+function mostRecentlyActiveTab(tabs) {
+  let best = null;
+  let bestTime = -1;
+  for (const tab of tabs) {
+    const time = tabLastActiveAt.get(tab.id) || 0;
+    if (time > bestTime) {
+      best = tab;
+      bestTime = time;
+    }
+  }
+  return best;
+}
+
 // Tabs sitting in a collapsed group are hidden from view -- switching
 // focus into one forces Chrome to expand that group, which is exactly the
 // kind of surprise a "close this group" click shouldn't produce (closing
@@ -690,11 +717,17 @@ async function handleTabUrl(tabId, url) {
       // it's always our own tab, never one the user grouped themselves.
       const isExistingHomepageTab = (t) => t.id !== tabId && t.url === HOMEPAGE_URL;
 
+      // mostRecentlyActiveTab, not .find() -- .find() picked whichever
+      // matching tab happened to come first in chrome.tabs.query({})'s
+      // order (tab creation order), which could easily be a tab the user
+      // hasn't looked at in hours while a tab they were just using a moment
+      // ago sat later in that same array. Redirecting to the one actually
+      // last used is what "switch back to what I was doing" means.
       const regulatedTab =
-        tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isCandidate) ||
-        tabs.find((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isExistingHomepageTab);
+        mostRecentlyActiveTab(tabs.filter((t) => isCandidate(t) && t.windowId === currentTab.windowId)) ||
+        mostRecentlyActiveTab(tabs.filter(isCandidate)) ||
+        mostRecentlyActiveTab(tabs.filter((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId)) ||
+        mostRecentlyActiveTab(tabs.filter(isExistingHomepageTab));
 
       if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
         switchAwayAttemptsByTab.delete(tabId);
@@ -814,6 +847,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
       overlayDomainByTab.delete(previousTabId);
     }
     activeTabByWindow.set(windowId, tabId);
+    tabLastActiveAt.set(tabId, Date.now());
 
     const tab = await chrome.tabs.get(tabId);
     lastHandledUrlByTab.delete(tabId);
@@ -826,6 +860,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, windowId });
     if (!activeTab) return;
+    tabLastActiveAt.set(activeTab.id, Date.now());
     lastHandledUrlByTab.delete(activeTab.id);
     await handleTabUrl(activeTab.id, activeTab.url);
   } catch (err) {}
@@ -844,6 +879,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   openViolationTabs.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
+  tabLastActiveAt.delete(tabId);
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
