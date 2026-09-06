@@ -475,6 +475,33 @@ const openViolationTabs = new Set();
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
 
+// tabId -> Date.now() of the last time it became the active tab (see the
+// onActivated/onFocusChanged listeners below) -- lets hard lock's redirect
+// pick the most recently used eligible tab instead of whichever one
+// happens to come first in browser.tabs.query({})'s arbitrary ordering (tab
+// creation order, not activity order). Resets on service worker restart
+// like every other in-memory map here -- worst case, the very next redirect
+// after a restart falls back to query order until tabs get activated again,
+// not "redirect breaks."
+const tabLastActiveAt = new Map();
+
+// Picks whichever of `tabs` was active most recently (falling back to the
+// first one if none of them have a recorded activation -- e.g. right after
+// a service worker restart, or tabs that were opened but never focused),
+// or null if `tabs` is empty.
+function mostRecentlyActiveTab(tabs) {
+  let best = null;
+  let bestTime = -1;
+  for (const tab of tabs) {
+    const time = tabLastActiveAt.get(tab.id) || 0;
+    if (time > bestTime) {
+      best = tab;
+      bestTime = time;
+    }
+  }
+  return best;
+}
+
 // Tabs sitting in a collapsed group are hidden from view -- switching
 // focus into one forces the browser to expand that group, which is
 // exactly the kind of surprise a "close this group" click shouldn't
@@ -698,11 +725,17 @@ async function handleTabUrl(tabId, url) {
       // Kept in sync with ../chrome/background.js.
       const isExistingHomepageTab = (t) => t.id !== tabId && t.url === HOMEPAGE_URL;
 
+      // mostRecentlyActiveTab, not .find() -- .find() picked whichever
+      // matching tab happened to come first in browser.tabs.query({})'s
+      // order (tab creation order), which could easily be a tab the user
+      // hasn't looked at in hours while a tab they were just using a moment
+      // ago sat later in that same array. Redirecting to the one actually
+      // last used is what "switch back to what I was doing" means.
       const regulatedTab =
-        tabs.find((t) => isCandidate(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isCandidate) ||
-        tabs.find((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId) ||
-        tabs.find(isExistingHomepageTab);
+        mostRecentlyActiveTab(tabs.filter((t) => isCandidate(t) && t.windowId === currentTab.windowId)) ||
+        mostRecentlyActiveTab(tabs.filter(isCandidate)) ||
+        mostRecentlyActiveTab(tabs.filter((t) => isExistingHomepageTab(t) && t.windowId === currentTab.windowId)) ||
+        mostRecentlyActiveTab(tabs.filter(isExistingHomepageTab));
 
       if ((switchAwayAttemptsByTab.get(tabId) || 0) >= MAX_SWITCH_AWAY_ATTEMPTS) {
         switchAwayAttemptsByTab.delete(tabId);
@@ -742,7 +775,15 @@ async function handleTabUrl(tabId, url) {
         }
       };
 
-      const BLACKOUT_AFTER_FAILURES = 3;
+      // Shown on the very first drag-lock failure, not after several --
+      // holding a tab down without any real drag motion may only trip
+      // the drag lock intermittently (a plain hold sits right at the edge
+      // of the browser's own drag-start threshold), so waiting for repeated
+      // consecutive failures could miss a hold that only blips the lock
+      // once or twice before this loop's next attempt succeeds anyway.
+      // Showing it on attempt 1 means the user always gets the "this is
+      // blocked" visual instead of possibly nothing at all.
+      const BLACKOUT_AFTER_FAILURES = 1;
       let consecutiveFailures = 0;
       let blackoutShown = false;
       const ensureBlackout = async () => {
@@ -754,13 +795,23 @@ async function handleTabUrl(tabId, url) {
             files: ["content/overlay.js"],
           });
           await browser.tabs.sendMessage(tabId, { type: "showBlackout" });
-        } catch (err) {}
+        } catch (err) {
+          // Swallowed silently before -- made an already-hard-to-repro
+          // "blackout doesn't show" report impossible to diagnose, since
+          // there was no trace of *why* it didn't show (restricted page,
+          // tab already gone, injection race, ...).
+          blackoutShown = false;
+          console.warn("CARMEN: could not show the hard-lock blackout overlay.", err);
+        }
       };
       const clearBlackout = async () => {
         if (!blackoutShown) return;
+        blackoutShown = false;
         try {
           await browser.tabs.sendMessage(tabId, { type: "hideBlackout" });
-        } catch (err) {}
+        } catch (err) {
+          console.warn("CARMEN: could not hide the hard-lock blackout overlay.", err);
+        }
       };
 
       try {
@@ -781,6 +832,11 @@ async function handleTabUrl(tabId, url) {
       } catch (err) {
         if (!isDragLockError(err)) throw err;
         await forceCloseTab(tabId);
+        // Whether or not that actually closed the tab (its own retries can
+        // still lose to a drag lock that simply never lets go), don't leave
+        // a black screen up with no explanation and no way to interact with
+        // it if the tab is still sitting there.
+        await clearBlackout();
       }
     } catch (err) {
       console.error("CARMEN: hard lock action failed.", err);
@@ -822,6 +878,7 @@ browser.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
       overlayDomainByTab.delete(previousTabId);
     }
     activeTabByWindow.set(windowId, tabId);
+    tabLastActiveAt.set(tabId, Date.now());
 
     const tab = await browser.tabs.get(tabId);
     lastHandledUrlByTab.delete(tabId);
@@ -834,6 +891,7 @@ browser.windows.onFocusChanged.addListener(async (windowId) => {
   try {
     const [activeTab] = await browser.tabs.query({ active: true, windowId });
     if (!activeTab) return;
+    tabLastActiveAt.set(activeTab.id, Date.now());
     lastHandledUrlByTab.delete(activeTab.id);
     await handleTabUrl(activeTab.id, activeTab.url);
   } catch (err) {}
@@ -852,6 +910,7 @@ browser.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   openViolationTabs.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
+  tabLastActiveAt.delete(tabId);
 });
 
 browser.windows.onRemoved.addListener((windowId) => {
