@@ -767,7 +767,15 @@ async function handleTabUrl(tabId, url) {
         }
       };
 
-      const BLACKOUT_AFTER_FAILURES = 3;
+      // Shown on the very first drag-lock failure, not after several --
+      // holding a tab down without any real drag motion may only trip
+      // Chrome's drag lock intermittently (a plain hold sits right at the
+      // edge of Chrome's own drag-start threshold), so waiting for repeated
+      // consecutive failures could miss a hold that only blips the lock
+      // once or twice before this loop's next attempt succeeds anyway.
+      // Showing it on attempt 1 means the user always gets the "this is
+      // blocked" visual instead of possibly nothing at all.
+      const BLACKOUT_AFTER_FAILURES = 1;
       let consecutiveFailures = 0;
       let blackoutShown = false;
       const ensureBlackout = async () => {
@@ -779,13 +787,23 @@ async function handleTabUrl(tabId, url) {
             files: ["content/overlay.js"],
           });
           await chrome.tabs.sendMessage(tabId, { type: "showBlackout" });
-        } catch (err) {}
+        } catch (err) {
+          // Swallowed silently before -- made an already-hard-to-repro
+          // "blackout doesn't show" report impossible to diagnose, since
+          // there was no trace of *why* it didn't show (restricted page,
+          // tab already gone, injection race, ...).
+          blackoutShown = false;
+          console.warn("CARMEN: could not show the hard-lock blackout overlay.", err);
+        }
       };
       const clearBlackout = async () => {
         if (!blackoutShown) return;
+        blackoutShown = false;
         try {
           await chrome.tabs.sendMessage(tabId, { type: "hideBlackout" });
-        } catch (err) {}
+        } catch (err) {
+          console.warn("CARMEN: could not hide the hard-lock blackout overlay.", err);
+        }
       };
 
       try {
@@ -806,6 +824,11 @@ async function handleTabUrl(tabId, url) {
       } catch (err) {
         if (!isDragLockError(err)) throw err;
         await forceCloseTab(tabId);
+        // Whether or not that actually closed the tab (its own retries can
+        // still lose to a drag lock that simply never lets go), don't leave
+        // a black screen up with no explanation and no way to interact with
+        // it if the tab is still sitting there.
+        await clearBlackout();
       }
     } catch (err) {
       console.error("CARMEN: hard lock action failed.", err);
