@@ -908,9 +908,31 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 browser.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
-  openViolationTabs.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
   tabLastActiveAt.delete(tabId);
+
+  // Closing a still-violating tab (user closes it, or the app closes it)
+  // must resolve the open violation server-side the same way navigating
+  // back to a whitelisted URL does -- otherwise session_manager's
+  // _open_violation_index["domain"] stays open forever, since nothing else
+  // ever revisits it once the tab is gone.
+  if (openViolationTabs.delete(tabId)) {
+    getLocalSession()
+      .then((local) => {
+        if (local.isActive) return;
+        return apiFetch("/violation/resolved", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "domain" }),
+        });
+      })
+      .catch((err) => {
+        console.warn(
+          "CARMEN: could not report violation resolution to desktop app.",
+          err
+        );
+      });
+  }
 });
 
 browser.windows.onRemoved.addListener((windowId) => {
