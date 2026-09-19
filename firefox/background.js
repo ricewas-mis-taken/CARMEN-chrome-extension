@@ -17,6 +17,8 @@ function defaultSession() {
   return {
     isActive: false,
     isPaused: false,
+    isBreak: false,
+    pomodoro: null,
     endTime: 0,
     startedAt: null,
     activeElapsedMs: 0,
@@ -191,6 +193,12 @@ async function getSession() {
     return {
       isActive,
       isPaused,
+      // True during a pomodoro session's break phase (see carmen-desktop's
+      // session_manager.start_pomodoro_session) -- enforced the same way
+      // isPaused already is below (handleTabUrl treats either as "nothing
+      // is enforced right now"), just without freezing the countdown.
+      isBreak: !!data.isBreak,
+      pomodoro: data.pomodoro || null,
       endTime: isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
       startedAt,
       activeElapsedMs,
@@ -634,7 +642,7 @@ async function handleTabUrl(tabId, url) {
   lastHandledUrlByTab.set(tabId, url);
 
   const session = await getSession();
-  if (!session.isActive || session.isPaused) return;
+  if (!session.isActive || session.isPaused || session.isBreak) return;
 
   const whitelisted = isWhitelisted(url, session.domainWhitelist);
 
