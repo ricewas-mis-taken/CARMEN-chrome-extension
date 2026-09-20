@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CARMEN — Screen Time</title>
+    <link rel="stylesheet" href="screentime.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div class="logo-dot"></div>
+        <h1>CARMEN — Screen Time</h1>
+      </header>
+
+      <p class="hint">
+        Domain-only -- the desktop app also tracks app time; see its Screen Time tab for both.
+      </p>
+
+      <div class="range-toggle">
+        <button type="button" id="range-day-btn" class="range-btn selected">Daily</button>
+        <button type="button" id="range-week-btn" class="range-btn">Weekly</button>
+      </div>
+
+      <div id="chart" class="chart"></div>
+
+      <div id="sections"></div>
+    </div>
+
+    <script src="screentime.js"></script>
+  </body>
+</html>
