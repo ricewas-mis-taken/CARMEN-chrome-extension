@@ -47,6 +47,7 @@ const reviewAdditionsBtn = document.getElementById("review-additions-btn");
 const saveWhitelistBtn = document.getElementById("save-whitelist-btn");
 const saveWhitelistStatusEl = document.getElementById("save-whitelist-status");
 const setupViewLogBtn = document.getElementById("setup-view-log-btn");
+const screenTimeBtn = document.getElementById("screentime-btn");
 
 const apiTokenInput = document.getElementById("api-token-input");
 const saveApiTokenBtn = document.getElementById("save-api-token-btn");
@@ -288,6 +289,10 @@ viewLogBtn.addEventListener("click", () => {
 
 setupViewLogBtn.addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("log/log.html") });
+});
+
+screenTimeBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("screentime/screentime.html") });
 });
 
 nuclearBtn.addEventListener("click", () => {

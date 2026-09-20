@@ -1,0 +1,152 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  background: #f7faf9;
+  color: #1f2933;
+}
+
+#app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.logo-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4fb0a5, #3f8f86);
+}
+
+.header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.hint {
+  font-size: 12px;
+  color: #7b8794;
+  margin: 0 0 20px;
+}
+
+.range-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.range-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #d3dae0;
+  background: #fff;
+  color: #52606d;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.range-btn.selected {
+  background: #3f8f86;
+  border-color: #3f8f86;
+  color: #fff;
+}
+
+.chart {
+  margin-bottom: 24px;
+}
+
+.chart-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.chart-label {
+  width: 100px;
+  flex-shrink: 0;
+  color: #1f2933;
+  font-weight: 600;
+}
+
+.chart-track {
+  flex: 1;
+  background: #e7edf0;
+  border-radius: 5px;
+  height: 16px;
+  overflow: hidden;
+}
+
+.chart-fill {
+  height: 100%;
+  border-radius: 5px;
+}
+
+.chart-value {
+  width: 70px;
+  flex-shrink: 0;
+  color: #7b8794;
+  text-align: right;
+}
+
+.empty-state {
+  color: #7b8794;
+  font-size: 13px;
+}
+
+.category-section {
+  margin-bottom: 20px;
+}
+
+.category-header {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.domain-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.domain-name {
+  color: #1f2933;
+}
+
+.domain-time {
+  color: #7b8794;
+}
+
+.group-toggle {
+  background: none;
+  border: none;
+  color: #3f8f86;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.group-details {
+  padding-left: 14px;
+}
+
+.group-details.hidden {
+  display: none;
+}

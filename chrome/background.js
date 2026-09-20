@@ -536,6 +536,74 @@ function getHostname(url) {
   }
 }
 
+// Always-on per-day screen time tracking -- entirely independent of any
+// focus session (no isActive/isPaused/isBreak check anywhere in here), the
+// browser-side half of the Screen Time feature (see carmen-desktop's
+// screentime_store.py). Stored in chrome.storage.local rather than a plain
+// module variable so a leg in progress survives the service worker being
+// unloaded and re-woken by the next event -- MV3 workers can be killed at
+// any idle moment, and a plain variable would silently lose track of when
+// the current domain-viewing leg started.
+const SCREEN_TIME_DAY_KEY = "screenTimeByDay";
+const SCREEN_TIME_CURRENT_KEY = "screenTimeCurrent";
+// Caps a single checkpoint's elapsed time -- guards against a stale
+// startedAt (the worker was suspended for a long time before the next
+// event or the periodic alarm woke it) inflating one leg unrealistically.
+const SCREEN_TIME_MAX_LEG_SECONDS = 3600;
+const SCREEN_TIME_ALARM_NAME = "screenTimeCheckpoint";
+
+function screenTimeDayKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function screenTimeDomainForUrl(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  return getHostname(url);
+}
+
+async function addScreenTimeSeconds(domain, seconds) {
+  if (!domain || seconds <= 0) return;
+  seconds = Math.min(seconds, SCREEN_TIME_MAX_LEG_SECONDS);
+  await withStorageLock(async () => {
+    const data = await chrome.storage.local.get(SCREEN_TIME_DAY_KEY);
+    const byDay = data[SCREEN_TIME_DAY_KEY] || {};
+    const day = screenTimeDayKey();
+    const bucket = byDay[day] || {};
+    bucket[domain] = (bucket[domain] || 0) + seconds;
+    byDay[day] = bucket;
+    await chrome.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
+  });
+  // Best-effort -- desktop being unreachable (or simply not paired) must
+  // never break local tracking, which is why this isn't awaited by callers.
+  apiFetch("/screentime/domain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, seconds }),
+  }).catch(() => {});
+}
+
+// Called every time the active domain might have changed (tab switch,
+// window focus change, navigation on the active tab, the tracked tab
+// closing) and once a minute by SCREEN_TIME_ALARM_NAME to checkpoint a
+// long-lived leg without waiting for it to end. Flushes whatever was being
+// timed, then starts timing newDomain (or stops timing anything, if null --
+// the browser lost focus, or the active tab isn't a real website).
+async function checkpointScreenTime(newDomain, newTabId = null) {
+  const data = await chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY);
+  const current = data[SCREEN_TIME_CURRENT_KEY];
+  const now = Date.now();
+  if (current && current.domain) {
+    await addScreenTimeSeconds(current.domain, (now - current.startedAt) / 1000);
+  }
+  if (newDomain) {
+    await chrome.storage.local.set({
+      [SCREEN_TIME_CURRENT_KEY]: { domain: newDomain, tabId: newTabId, startedAt: now },
+    });
+  } else {
+    await chrome.storage.local.set({ [SCREEN_TIME_CURRENT_KEY]: null });
+  }
+}
+
 // storage.local key for the popup's "Allow this site?" banner (see
 // popup.js's checkAllowSuggestion) -- whichever domain hard lock most
 // recently redirected away from or closed, and when, so the popup can
@@ -881,16 +949,23 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
     tabLastActiveAt.set(tabId, Date.now());
 
     const tab = await chrome.tabs.get(tabId);
+    await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
     lastHandledUrlByTab.delete(tabId);
     await handleTabUrl(tabId, tab.url);
   } catch (err) {}
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    // The browser itself lost OS focus entirely -- nothing is "being
+    // viewed" until some window regains focus.
+    await checkpointScreenTime(null).catch(() => {});
+    return;
+  }
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, windowId });
     if (!activeTab) return;
+    await checkpointScreenTime(screenTimeDomainForUrl(activeTab.url), activeTab.id);
     tabLastActiveAt.set(activeTab.id, Date.now());
     lastHandledUrlByTab.delete(activeTab.id);
     await handleTabUrl(activeTab.id, activeTab.url);
@@ -898,6 +973,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // Only the active tab's own navigation should retarget what's being
+  // timed -- onUpdated fires for background tabs too, which must not be
+  // mistaken for "the user is now looking at this domain".
+  if (tab.active && (changeInfo.url || changeInfo.status === "complete")) {
+    await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
+  }
   if (changeInfo.status === "complete" && tab.url) {
     await handleTabUrl(tabId, tab.url);
   } else if (changeInfo.url) {
@@ -910,6 +991,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
   tabLastActiveAt.delete(tabId);
+
+  chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY).then((data) => {
+    if (data[SCREEN_TIME_CURRENT_KEY]?.tabId === tabId) {
+      checkpointScreenTime(null).catch(() => {});
+    }
+  });
 
   // Closing a still-violating tab (user closes it, or the app closes it)
   // must resolve the open violation server-side the same way navigating
@@ -972,6 +1059,20 @@ function notifyLocalSessionComplete(session) {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === SCREEN_TIME_ALARM_NAME) {
+    // Re-checkpoints to itself: flushes the elapsed time on whatever's
+    // currently being timed and immediately restarts the clock on the same
+    // domain/tab, so a tab left open for hours keeps getting counted
+    // instead of it all landing in one giant leg only recorded when the
+    // domain finally changes (or being lost outright if the browser closes
+    // ungracefully before that ever happens).
+    const data = await chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY);
+    const current = data[SCREEN_TIME_CURRENT_KEY];
+    if (current && current.domain) {
+      await checkpointScreenTime(current.domain, current.tabId);
+    }
+    return;
+  }
   if (alarm.name === ALARM_NAME) {
     lastAcceptableUrl = "";
     const local = await getLocalSession();
@@ -1011,6 +1112,11 @@ async function updateSyncBadge() {
     });
   }
 }
+
+// periodInMinutes: 1 is chrome.alarms' own minimum granularity -- safe to
+// call on every service worker startup, since creating an alarm with a name
+// that already exists just replaces it rather than stacking duplicates.
+chrome.alarms.create(SCREEN_TIME_ALARM_NAME, { periodInMinutes: 1 });
 
 startPolling({
   storageApi: chrome.storage.local,
@@ -1316,6 +1422,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.warn("CARMEN: could not fetch history.", err);
         sendResponse({ ok: false, error: String(err) });
       }
+    })();
+    return true;
+  }
+
+  if (message?.type === "getScreenTime") {
+    (async () => {
+      // Purely local -- the extension only ever shows domain time, and it
+      // already has that in chrome.storage.local (it's the source that
+      // reports to desktop, not the other way around), so there's no need
+      // to depend on the desktop app being reachable just to render this.
+      const data = await chrome.storage.local.get(SCREEN_TIME_DAY_KEY);
+      const byDay = data[SCREEN_TIME_DAY_KEY] || {};
+      sendResponse({ ok: true, byDay });
     })();
     return true;
   }
