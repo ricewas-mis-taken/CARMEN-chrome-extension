@@ -4,14 +4,35 @@
 // plus ~45k domains imported from the UT1 blacklists, CC BY-SA). Too large
 // (44k+ entries) to inline as a JS literal here, so it's fetched once at
 // page load instead of embedded directly.
+//
+// Storage (chrome.storage.local's SCREEN_TIME_DAY_KEY bucket, see
+// background.js) only ever holds the raw domain -> seconds tally -- no
+// category is baked in at write time. That means categorization is entirely
+// retroactive: every render() call re-runs categorizeDomain() against
+// whatever DOMAIN_CATEGORIES currently holds, so time logged before this
+// domain list existed (or before it knew about a given site) gets
+// categorized correctly the moment the list catches up, with no migration
+// needed. The only way that *doesn't* happen is if this fetch itself fails
+// silently -- previously it just logged a console.warn and fell through
+// with DOMAIN_CATEGORIES == {}, which categorizes literally everything as
+// "Other" with no visible sign anything went wrong. loadDomainCategories()
+// now reports success/failure so the caller can surface that instead of
+// hiding it.
 let DOMAIN_CATEGORIES = {};
 
 async function loadDomainCategories() {
   try {
     const resp = await fetch(chrome.runtime.getURL("screentime-domains.json"));
-    DOMAIN_CATEGORIES = await resp.json();
+    const data = await resp.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("screentime-domains.json did not parse to an object");
+    }
+    DOMAIN_CATEGORIES = data;
+    return true;
   } catch (err) {
     console.warn("CARMEN: could not load domain categories.", err);
+    DOMAIN_CATEGORIES = {};
+    return false;
   }
 }
 
@@ -192,9 +213,24 @@ weekBtn.addEventListener("click", () => {
   render(currentByDay, currentRange);
 });
 
-loadDomainCategories().then(() => {
-  chrome.runtime.sendMessage({ type: "getScreenTime" }, (response) => {
-    currentByDay = response?.byDay || {};
-    render(currentByDay, currentRange);
-  });
+const categoryWarning = document.getElementById("category-warning");
+const categoryRetryBtn = document.getElementById("category-retry-btn");
+
+function setCategoryWarningVisible(visible) {
+  categoryWarning.classList.toggle("visible", visible);
+}
+
+async function loadAndRender() {
+  const ok = await loadDomainCategories();
+  setCategoryWarningVisible(!ok);
+  render(currentByDay, currentRange);
+}
+
+categoryRetryBtn.addEventListener("click", () => {
+  loadAndRender();
+});
+
+chrome.runtime.sendMessage({ type: "getScreenTime" }, (response) => {
+  currentByDay = response?.byDay || {};
+  loadAndRender();
 });

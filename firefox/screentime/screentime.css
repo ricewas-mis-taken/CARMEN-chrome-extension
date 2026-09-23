@@ -150,3 +150,32 @@ body {
 .group-details.hidden {
   display: none;
 }
+
+.category-warning {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fdf1e3;
+  border: 1px solid #e8c48a;
+  color: #7a5417;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.category-warning.visible {
+  display: flex;
+}
+
+.category-warning button {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #e8c48a;
+  background: #fff;
+  color: #7a5417;
+  font-size: 12px;
+  cursor: pointer;
+}
