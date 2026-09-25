@@ -11,6 +11,7 @@ function defaultSession() {
     isActive: false,
     isPaused: false,
     isBreak: false,
+    isBurnout: false,
     pomodoro: null,
     endTime: 0,
     startedAt: null,
@@ -159,6 +160,7 @@ async function getSession() {
     return {
       isActive: true,
       isPaused: local.isPaused,
+      isBurnout: false,
       endTime: local.endTime,
       startedAt,
       activeElapsedMs,
@@ -191,6 +193,14 @@ async function getSession() {
       // isPaused already is below (handleTabUrl treats either as "nothing
       // is enforced right now"), just without freezing the countdown.
       isBreak: !!data.isBreak,
+      // Only true for a session started as "Until I burnout" -- see
+      // carmen-desktop's GET /status. Its secondsRemaining is an artificial
+      // multi-hour ceiling, not a real deadline; endTime (and
+      // formatTimeRemaining's countdown from it) is still computed the same
+      // way below since some callers key off it regardless, but anywhere
+      // this is shown to the user should branch on isBurnout and show
+      // elapsed time instead (see handleTabUrl's overlay message).
+      isBurnout: !!data.isBurnout,
       pomodoro: data.pomodoro || null,
       endTime: isActive ? Date.now() + (data.secondsRemaining || 0) * 1000 : 0,
       startedAt,
@@ -921,10 +931,17 @@ async function handleTabUrl(tabId, url) {
       target: { tabId },
       files: ["content/overlay.js"],
     });
-    const timeRemainingText = formatTimeRemaining(session.endTime);
+    // A burnout session ("Until I burnout") runs under an artificial 8-hour
+    // ceiling on the desktop side -- showing that as "7h 58m left in this
+    // session" reads as a real deadline that doesn't exist. Show elapsed
+    // time instead, same distinction the popup's own countdown already
+    // makes (see popup.js's renderActiveSession).
+    const overlayMessage = session.isBurnout
+      ? `Until burnout — ${formatDurationSeconds(session.activeElapsedMs / 1000)} elapsed`
+      : `${formatTimeRemaining(session.endTime)} left in this session`;
     await chrome.tabs.sendMessage(tabId, {
       type: "showOverlay",
-      timeRemainingText,
+      overlayMessage,
     });
   } catch (err) {}
 }
