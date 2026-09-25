@@ -6,7 +6,7 @@
   const BLACKOUT_ID = "carmen-blackout-root";
   const GRACE_SECONDS = 3;
 
-  function showOverlay(timeRemainingText) {
+  function showOverlay(overlayMessage) {
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) existing.remove();
 
@@ -44,7 +44,7 @@
     `;
 
     const message = document.createElement("div");
-    message.textContent = `${timeRemainingText} left in this session`;
+    message.textContent = overlayMessage;
     message.style.cssText = `
       font-size: 14px;
       color: #52606d;
@@ -201,7 +201,7 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "showOverlay") {
-      showOverlay(message.timeRemainingText);
+      showOverlay(message.overlayMessage);
     } else if (message?.type === "showBlackout") {
       showBlackout();
     } else if (message?.type === "hideBlackout") {
