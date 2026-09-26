@@ -113,11 +113,23 @@
         <div class="badge-row">
           <div class="lock-mode-badge" id="lock-mode-badge">Soft Lock</div>
           <div class="lock-mode-badge paused-badge hidden" id="paused-badge">Paused</div>
+          <div class="lock-mode-badge break-badge hidden" id="break-badge">On Break</div>
         </div>
 
         <div class="event-source-row hidden" id="event-source-row">
           <span class="event-source-icon" id="event-source-icon">📅</span>
           <span class="event-source-title" id="event-source-title"></span>
+        </div>
+
+        <div class="pomodoro-info hidden" id="pomodoro-info">
+          <div class="review-info-line">
+            <span class="review-info-label">Pomodoro</span>
+            <span id="pomodoro-phase-text"></span>
+          </div>
+          <div class="review-info-line">
+            <span class="review-info-label">Cycle</span>
+            <span id="pomodoro-cycle-text"></span>
+          </div>
         </div>
 
         <div class="review-info hidden" id="review-info">
