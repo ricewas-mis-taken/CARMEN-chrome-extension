@@ -6,8 +6,13 @@ const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
 const reviewProgressBannerEl = document.getElementById("review-progress-banner");
+const reviewProgressRowEl = document.getElementById("review-progress-row");
 const reviewProgressTitleEl = document.getElementById("review-progress-title");
 const reviewProgressElapsedEl = document.getElementById("review-progress-elapsed");
+const reviewProgressPausedLineEl = document.getElementById("review-progress-paused-line");
+const reviewProgressDetailEl = document.getElementById("review-progress-detail");
+const reviewProgressSubjectEl = document.getElementById("review-progress-subject");
+const reviewProgressPauseBtn = document.getElementById("review-progress-pause-btn");
 
 const presetButtons = document.querySelectorAll(".preset-btn");
 const customMinutesInput = document.getElementById("custom-minutes");
@@ -22,7 +27,9 @@ const lockModeBadgeEl = document.getElementById("lock-mode-badge");
 const pausedBadgeEl = document.getElementById("paused-badge");
 const breakBadgeEl = document.getElementById("break-badge");
 const pomodoroInfoEl = document.getElementById("pomodoro-info");
-const pomodoroPhaseTextEl = document.getElementById("pomodoro-phase-text");
+const pomodoroChipRowEl = document.getElementById("pomodoro-chip-row");
+const pomodoroChipTimeEl = document.getElementById("pomodoro-chip-time");
+const pomodoroChipDetailEl = document.getElementById("pomodoro-chip-detail");
 const pomodoroCycleTextEl = document.getElementById("pomodoro-cycle-text");
 const pauseBtn = document.getElementById("pause-btn");
 const allowedSitesEl = document.getElementById("allowed-sites");
@@ -305,6 +312,35 @@ startBtn.addEventListener("click", async () => {
   );
 });
 
+pomodoroChipRowEl.addEventListener("click", () => {
+  pomodoroInfoEl.classList.toggle("expanded");
+  pomodoroChipDetailEl.classList.toggle("hidden");
+});
+
+reviewProgressRowEl.addEventListener("click", () => {
+  reviewProgressBannerEl.classList.toggle("expanded");
+  reviewProgressDetailEl.classList.toggle("hidden");
+});
+
+reviewProgressPauseBtn.addEventListener("click", () => {
+  const willPause = reviewProgressPauseBtn.textContent.trim().startsWith("Pause");
+  reviewProgressPauseBtn.disabled = true;
+  chrome.runtime.sendMessage(
+    { type: willPause ? "pauseReview" : "resumeReview" },
+    (response) => {
+      reviewProgressPauseBtn.disabled = false;
+      if (response?.ok) {
+        refreshStatus();
+      } else {
+        reviewProgressPauseBtn.textContent = "Desktop app unreachable — try again";
+        setTimeout(() => {
+          reviewProgressPauseBtn.textContent = willPause ? "Pause" : "Resume";
+        }, 2500);
+      }
+    }
+  );
+});
+
 pauseBtn.addEventListener("click", () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   pauseBtn.disabled = true;
@@ -437,6 +473,14 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, isBurnout) 
     } else {
       const msRemaining = Math.max(0, endTime - Date.now());
       countdownEl.textContent = formatElapsed(msRemaining);
+      // Mirrors the same countdown into the pomodoro chip (see
+      // renderActiveSession) whenever it's showing -- endTime during a
+      // pomodoro is already the current phase's own deadline (see
+      // carmen-desktop's session_manager._advance_pomodoro_locked), so this
+      // is the literal time-left-in-this-phase value, not a separate one.
+      if (!pomodoroInfoEl.classList.contains("hidden")) {
+        pomodoroChipTimeEl.textContent = formatElapsed(msRemaining);
+      }
       if (msRemaining <= 0) {
         stopCountdown();
         showSetupView();
@@ -481,7 +525,10 @@ function renderActiveSession(session) {
   const pomodoro = session.pomodoro;
   pomodoroInfoEl.classList.toggle("hidden", !pomodoro);
   if (pomodoro) {
-    pomodoroPhaseTextEl.textContent = session.isBreak ? "Break" : "Focus";
+    // Phase (Focus/Break) is already conveyed by the "On Break" pill above
+    // -- this chip's own collapsed row is just the label + time-left (see
+    // startCountdown's tick(), which mirrors the value in here), expanding
+    // to the cycle count on click.
     pomodoroCycleTextEl.textContent = `${pomodoro.currentCycle} of ${pomodoro.totalCycles}`;
   }
 
@@ -510,9 +557,13 @@ function renderActiveSession(session) {
   const activeElapsedMs = session.activeElapsedMs || 0;
   if (session.isPaused) {
     stopCountdown();
-    countdownEl.textContent = session.isBurnout
+    const pausedText = session.isBurnout
       ? formatElapsed(activeElapsedMs)
       : formatElapsed(Math.max(0, session.endTime - Date.now()));
+    countdownEl.textContent = pausedText;
+    if (pomodoro) {
+      pomodoroChipTimeEl.textContent = pausedText;
+    }
   } else {
     startCountdown(session.endTime, activeElapsedMs, Date.now(), !!session.isBurnout);
   }
@@ -576,11 +627,22 @@ allowSuggestionDismissBtn.addEventListener("click", async () => {
 function renderReviewProgressBanner(session) {
   const review = session?.reviewInProgress;
   reviewProgressBannerEl.classList.toggle("hidden", !review);
-  if (review) {
-    reviewProgressTitleEl.textContent = `Reviewing: ${review.problemName}`;
-    const elapsedMs = Date.now() - new Date(review.startedAt).getTime();
-    reviewProgressElapsedEl.textContent = formatElapsed(elapsedMs);
+  if (!review) return;
+
+  reviewProgressTitleEl.textContent = review.problemName;
+  reviewProgressElapsedEl.textContent = formatElapsed((review.elapsedSeconds || 0) * 1000);
+  reviewProgressSubjectEl.textContent = review.subjectName || "—";
+  // Colors the chip after the problem's own category color (subjectColor,
+  // e.g. "#4A90D9" -- same color already used for it elsewhere, like the
+  // Review tab's own subject tags) via a CSS custom property, rather than
+  // a fixed color -- see popup.css's .review-chip.
+  reviewProgressBannerEl.style.setProperty("--review-color", review.subjectColor || "#f0d38a");
+
+  reviewProgressPausedLineEl.classList.toggle("hidden", !review.isPaused);
+  if (review.isPaused) {
+    reviewProgressPausedLineEl.textContent = review.autoPaused ? "Paused (on pomodoro break)" : "Paused";
   }
+  reviewProgressPauseBtn.textContent = review.isPaused ? "Resume" : "Pause";
 }
 
 function refreshStatus() {

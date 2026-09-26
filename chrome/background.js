@@ -1465,6 +1465,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "pauseReview") {
+    (async () => {
+      try {
+        await apiFetch("/review/pause", { method: "POST" });
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === "resumeReview") {
+    (async () => {
+      try {
+        await apiFetch("/review/resume", { method: "POST" });
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === "getDeviceInfo") {
     (async () => {
       try {
