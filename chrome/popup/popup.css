@@ -159,6 +159,79 @@ textarea#whitelist:focus {
   color: #9aa5b1;
 }
 
+.device-link-card {
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.device-link-card.unlinked {
+  border: 1.5px dashed #d9e2e5;
+  background: #fafbfc;
+}
+
+.device-link-card #api-token-input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid #d9e2e5;
+  font-size: 13px;
+  color: #1f2933;
+  outline: none;
+  background: #ffffff;
+}
+
+.device-link-card #api-token-input:focus {
+  border-color: #4fb0a5;
+}
+
+.device-link-card.linked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1.5px solid #9fd4cb;
+  background: linear-gradient(135deg, #eef6f4, #f4faf9);
+}
+
+.device-link-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2f6d64;
+}
+
+.device-link-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #3f8f86;
+  box-shadow: 0 0 0 3px rgba(63, 143, 134, 0.18);
+}
+
+.device-link-name {
+  font-size: 12px;
+  color: #52606d;
+  padding-left: 15px;
+}
+
+.device-link-change-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: #7b8794;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.device-link-change-btn:hover {
+  color: #4fb0a5;
+}
+
 .primary-btn {
   width: 100%;
   padding: 12px 0;

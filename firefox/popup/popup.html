@@ -73,18 +73,32 @@
 
         <div class="field">
           <label for="api-token-input">Desktop app pairing</label>
-          <input
-            type="text"
-            id="api-token-input"
-            placeholder="Paste API token from the tray menu"
-            autocomplete="off"
-          />
-          <span class="hint">Tray menu -> Copy API Token. One-time, per browser profile.</span>
-          <div class="whitelist-save-row">
-            <button type="button" id="save-api-token-btn" class="secondary-btn">
-              Save Token
+
+          <div class="device-link-card linked hidden" id="device-link-linked">
+            <div class="device-link-status">
+              <span class="device-link-dot"></span>
+              <span>Desktop Linked</span>
+            </div>
+            <div class="device-link-name" id="device-link-name"></div>
+            <button type="button" id="device-unlink-btn" class="device-link-change-btn">
+              Change token
             </button>
-            <span class="hint" id="api-token-status"></span>
+          </div>
+
+          <div class="device-link-card unlinked" id="device-link-unlinked">
+            <input
+              type="text"
+              id="api-token-input"
+              placeholder="Paste API token from the tray menu"
+              autocomplete="off"
+            />
+            <span class="hint">Tray menu -> Copy API Token. One-time, per browser profile.</span>
+            <div class="whitelist-save-row">
+              <button type="button" id="save-api-token-btn" class="secondary-btn">
+                Save Token
+              </button>
+              <span class="hint" id="api-token-status"></span>
+            </div>
           </div>
         </div>
 

@@ -1451,6 +1451,18 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "getDeviceInfo") {
+    (async () => {
+      try {
+        const data = await apiFetch("/device/info", { method: "GET" });
+        sendResponse({ ok: true, computerName: data.computerName });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === "getScreenTime") {
     (async () => {
       // Purely local -- the extension only ever shows domain time, and it

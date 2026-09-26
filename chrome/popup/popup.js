@@ -56,6 +56,10 @@ const screenTimeBtn = document.getElementById("screentime-btn");
 const apiTokenInput = document.getElementById("api-token-input");
 const saveApiTokenBtn = document.getElementById("save-api-token-btn");
 const apiTokenStatusEl = document.getElementById("api-token-status");
+const deviceLinkLinkedEl = document.getElementById("device-link-linked");
+const deviceLinkUnlinkedEl = document.getElementById("device-link-unlinked");
+const deviceLinkNameEl = document.getElementById("device-link-name");
+const deviceUnlinkBtn = document.getElementById("device-unlink-btn");
 
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 const PENDING_ALLOW_KEY = "pendingAllowSuggestion";
@@ -145,6 +149,33 @@ getApiToken(chrome.storage.local).then((token) => {
   }
 });
 
+// Confirms the saved token is actually accepted by the desktop app right
+// now (not just present in storage) via GET /device/info, and shows which
+// computer it's linked to -- rather than a bare "Saved." that never proves
+// pairing still works. A failed/unreachable check falls back to the plain
+// pairing form, whose placeholder above already covers "token saved but
+// couldn't verify this instant" without looking like pairing was lost.
+function refreshDeviceLinkStatus() {
+  chrome.runtime.sendMessage({ type: "getDeviceInfo" }, (response) => {
+    if (response?.ok) {
+      deviceLinkNameEl.textContent = response.computerName;
+      deviceLinkLinkedEl.classList.remove("hidden");
+      deviceLinkUnlinkedEl.classList.add("hidden");
+    } else {
+      deviceLinkLinkedEl.classList.add("hidden");
+      deviceLinkUnlinkedEl.classList.remove("hidden");
+    }
+  });
+}
+
+refreshDeviceLinkStatus();
+
+deviceUnlinkBtn.addEventListener("click", () => {
+  deviceLinkLinkedEl.classList.add("hidden");
+  deviceLinkUnlinkedEl.classList.remove("hidden");
+  apiTokenInput.focus();
+});
+
 let apiTokenStatusTimeout = null;
 
 saveApiTokenBtn.addEventListener("click", async () => {
@@ -158,6 +189,7 @@ saveApiTokenBtn.addEventListener("click", async () => {
   apiTokenStatusTimeout = setTimeout(() => {
     apiTokenStatusEl.textContent = "";
   }, 3000);
+  refreshDeviceLinkStatus();
 });
 
 let selectedMinutes = null;
