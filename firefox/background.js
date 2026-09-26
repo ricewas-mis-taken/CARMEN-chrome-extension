@@ -757,21 +757,20 @@ async function cloakOffendingTab(tabId) {
   }
 }
 
+async function uncloakTab(tabId) {
+  if (!cloakedTabIds.has(tabId)) return;
+  cloakedTabIds.delete(tabId);
+  try {
+    await browser.tabs.sendMessage(tabId, { type: "uncloakTab" });
+  } catch (err) {
+    // Expected/harmless if the tab already closed or reloaded (cloak.js's
+    // own in-page state, and so its listener, wouldn't exist anymore).
+  }
+}
+
 async function uncloakAllTabs() {
-  // The ONLY two things that ever clear a cloak -- see sweepTabsForCloak()'s
-  // own call sites. Navigating the cloaked tab to a whitelisted URL does
-  // NOT uncloak it on its own; a cloak only ever lifts because enforcement
-  // itself stopped (break or session end), never because of what a single
-  // tab's URL happens to be at the moment.
-  const tabIds = Array.from(cloakedTabIds);
-  cloakedTabIds.clear();
-  for (const tabId of tabIds) {
-    try {
-      await browser.tabs.sendMessage(tabId, { type: "uncloakTab" });
-    } catch (err) {
-      // Expected/harmless if the tab already closed or reloaded (cloak.js's
-      // own in-page state, and so its listener, wouldn't exist anymore).
-    }
+  for (const tabId of Array.from(cloakedTabIds)) {
+    await uncloakTab(tabId);
   }
 }
 
@@ -783,11 +782,10 @@ async function sweepTabsForCloak() {
   // window.open, a link with target=_blank, etc.) without ever being
   // focused would otherwise never get cloaked at all.
   const session = await getSession();
-  if (!session.isActive || session.isPaused || session.isBreak) {
+  if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
     if (cloakedTabIds.size) await uncloakAllTabs();
     return;
   }
-  if (session.lockMode !== "hard") return;
 
   let tabs;
   try {
@@ -795,6 +793,21 @@ async function sweepTabsForCloak() {
   } catch (err) {
     return;
   }
+  const tabById = new Map(tabs.map((t) => [t.id, t]));
+
+  // A cloaked tab whose domain has since become whitelisted (this same tab
+  // navigated there, or the whitelist itself changed mid-session) goes back
+  // to being a normal, usable tab -- this is the one thing that DOES clear
+  // a cloak outside of uncloakAllTabs() above. It's still re-checked here
+  // (not just in handleTabUrl's own whitelisted branch) as a safety net for
+  // exactly that second case, where nothing about the tab itself changed.
+  for (const tabId of Array.from(cloakedTabIds)) {
+    const tab = tabById.get(tabId);
+    if (tab && tab.url && isWhitelisted(tab.url, session.domainWhitelist)) {
+      await uncloakTab(tabId);
+    }
+  }
+
   for (const tab of tabs) {
     if (tab.active) continue;
     if (!tab.url || !/^https?:\/\//i.test(tab.url)) continue;
@@ -825,6 +838,7 @@ async function handleTabUrl(tabId, url) {
   if (whitelisted) {
     lastAcceptableUrl = url;
     switchAwayAttemptsByTab.delete(tabId);
+    uncloakTab(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     if (session.source === "browser-only") return;
     if (!hadOpenViolation) return;
