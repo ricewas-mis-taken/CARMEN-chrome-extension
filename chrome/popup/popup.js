@@ -15,6 +15,10 @@ const startBtn = document.getElementById("start-btn");
 const countdownEl = document.getElementById("countdown");
 const lockModeBadgeEl = document.getElementById("lock-mode-badge");
 const pausedBadgeEl = document.getElementById("paused-badge");
+const breakBadgeEl = document.getElementById("break-badge");
+const pomodoroInfoEl = document.getElementById("pomodoro-info");
+const pomodoroPhaseTextEl = document.getElementById("pomodoro-phase-text");
+const pomodoroCycleTextEl = document.getElementById("pomodoro-cycle-text");
 const pauseBtn = document.getElementById("pause-btn");
 const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
@@ -422,6 +426,15 @@ function renderActiveSession(session) {
   pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
   pauseBtn.classList.toggle("is-paused", !!session.isPaused);
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
+
+  breakBadgeEl.classList.toggle("hidden", !session.isBreak);
+
+  const pomodoro = session.pomodoro;
+  pomodoroInfoEl.classList.toggle("hidden", !pomodoro);
+  if (pomodoro) {
+    pomodoroPhaseTextEl.textContent = session.isBreak ? "Break" : "Focus";
+    pomodoroCycleTextEl.textContent = `${pomodoro.currentCycle} of ${pomodoro.totalCycles}`;
+  }
 
   const isTaskSourced = session.source === "task";
   const isReviewSourced = session.source === "review";

@@ -225,6 +225,11 @@ textarea#whitelist:focus {
   color: #a86a00;
 }
 
+.break-badge {
+  background: #eef2ff;
+  color: #4756ca;
+}
+
 .event-source-row {
   display: flex;
   align-items: center;
@@ -247,7 +252,8 @@ textarea#whitelist:focus {
   white-space: nowrap;
 }
 
-.review-info {
+.review-info,
+.pomodoro-info {
   background: #f4f6f7;
   border-radius: 10px;
   padding: 10px 12px;
