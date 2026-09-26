@@ -28,6 +28,7 @@ function defaultSession() {
     eventTitle: null,
     reviewProblemName: null,
     reviewSubjectName: null,
+    reviewInProgress: null,
   };
 }
 
@@ -190,6 +191,7 @@ async function getSession() {
       eventTitle: null,
       reviewProblemName: null,
       reviewSubjectName: null,
+      reviewInProgress: null,
       desktopReachable: false,
     };
   }
@@ -231,6 +233,11 @@ async function getSession() {
       eventTitle: data.eventTitle || null,
       reviewProblemName: data.reviewProblemName || null,
       reviewSubjectName: data.reviewSubjectName || null,
+      // Independent of isActive above -- a review can be running (and stay
+      // running) while a completely different session is active, ends, or
+      // never existed at all (see carmen-desktop's
+      // review_store.get_active_review()).
+      reviewInProgress: data.reviewInProgress || null,
       desktopReachable: true,
     };
   } catch (err) {
