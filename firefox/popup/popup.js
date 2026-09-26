@@ -17,6 +17,7 @@ const whitelistTextarea = document.getElementById("whitelist");
 const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
+const countdownLabelEl = document.getElementById("countdown-label");
 const lockModeBadgeEl = document.getElementById("lock-mode-badge");
 const pausedBadgeEl = document.getElementById("paused-badge");
 const breakBadgeEl = document.getElementById("break-badge");
@@ -416,14 +417,23 @@ function formatElapsed(msElapsed) {
 function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, isBurnout) {
   stopCountdown();
   const tick = () => {
-    const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
-    countdownEl.textContent = formatElapsed(elapsed);
     // Burnout sessions carry an artificial endTime ceiling (see
     // background.js's defaultSession/getSession) that isn't a real
-    // deadline, so passing it must not end the popup's own display.
-    if (!isBurnout && endTime - Date.now() <= 0) {
-      stopCountdown();
-      showSetupView();
+    // deadline -- counting up from start is the only display that makes
+    // sense for them. Every other session type (manual, task, pomodoro,
+    // review, calendar-event) has a real deadline, so it counts DOWN to
+    // it instead -- counting up there would show the wrong thing entirely,
+    // not just a cosmetic mismatch.
+    if (isBurnout) {
+      const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
+      countdownEl.textContent = formatElapsed(elapsed);
+    } else {
+      const msRemaining = Math.max(0, endTime - Date.now());
+      countdownEl.textContent = formatElapsed(msRemaining);
+      if (msRemaining <= 0) {
+        stopCountdown();
+        showSetupView();
+      }
     }
   };
   tick();
@@ -488,10 +498,14 @@ function renderActiveSession(session) {
 
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
+  countdownLabelEl.textContent = session.isBurnout ? "Time elapsed" : "Time left";
+
   const activeElapsedMs = session.activeElapsedMs || 0;
   if (session.isPaused) {
     stopCountdown();
-    countdownEl.textContent = formatElapsed(activeElapsedMs);
+    countdownEl.textContent = session.isBurnout
+      ? formatElapsed(activeElapsedMs)
+      : formatElapsed(Math.max(0, session.endTime - Date.now()));
   } else {
     startCountdown(session.endTime, activeElapsedMs, Date.now(), !!session.isBurnout);
   }
