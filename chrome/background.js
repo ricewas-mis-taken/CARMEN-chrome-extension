@@ -4,6 +4,7 @@ import { POLL_INTERVAL_MS } from "./core/constants.js";
 import { getApiToken } from "./core/api-token.js";
 
 const API_BASE = "http://127.0.0.1:5847";
+const API_TIMEOUT_MS = 5000;
 const ALARM_NAME = "focusSessionEnd";
 
 function defaultSession() {
@@ -40,11 +41,25 @@ async function apiFetch(path, options) {
   // before this profile has been paired via the popup.
   const token = await getApiToken(chrome.storage.local);
   const headers = { ...(options && options.headers), "X-Carmen-Token": token };
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (!res.ok) {
-    throw new Error(`Desktop API ${path} responded with ${res.status}`);
+  // fetch() has no default timeout -- a desktop app that accepted the TCP
+  // connection but never sends a response (confirmed live: a wedged
+  // single-threaded Flask dev server did exactly this) would otherwise hang
+  // this call forever instead of ever reaching the catch blocks below that
+  // already know how to fall back to "desktop unreachable." Every caller of
+  // apiFetch already handles a thrown error the same way an abort produces,
+  // so this doesn't change behavior on a healthy desktop app -- only bounds
+  // how long a broken one can freeze the extension.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`Desktop API ${path} responded with ${res.status}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 const LOCAL_SESSION_KEY = "browserOnlySession";
