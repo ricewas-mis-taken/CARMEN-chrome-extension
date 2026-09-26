@@ -5,6 +5,10 @@ import { getApiToken, setApiToken } from "../core/api-token.js";
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
+const reviewProgressBannerEl = document.getElementById("review-progress-banner");
+const reviewProgressTitleEl = document.getElementById("review-progress-title");
+const reviewProgressElapsedEl = document.getElementById("review-progress-elapsed");
+
 const presetButtons = document.querySelectorAll(".preset-btn");
 const customMinutesInput = document.getElementById("custom-minutes");
 const lockSoftBtn = document.getElementById("lock-soft");
@@ -548,30 +552,53 @@ allowSuggestionDismissBtn.addEventListener("click", async () => {
   await browser.storage.local.remove(PENDING_ALLOW_KEY);
 });
 
+function renderReviewProgressBanner(session) {
+  const review = session?.reviewInProgress;
+  reviewProgressBannerEl.classList.toggle("hidden", !review);
+  if (review) {
+    reviewProgressTitleEl.textContent = `Reviewing: ${review.problemName}`;
+    const elapsedMs = Date.now() - new Date(review.startedAt).getTime();
+    reviewProgressElapsedEl.textContent = formatElapsed(elapsedMs);
+  }
+}
+
 async function refreshStatus() {
   const response = await browser.runtime.sendMessage({ type: "getStatus" });
   const session = response?.session;
   checkAllowSuggestion(session);
-  if (session?.isActive) {
+  // Shown independent of whichever view (setup/active) is picked below --
+  // a review can be running (and keep running) whether or not any other
+  // session is active, so it must never be hidden just because the main
+  // session view happens to be the setup screen right now.
+  renderReviewProgressBanner(session);
+  // Polling must stay armed for reviewInProgress alone too -- otherwise a
+  // review started with no other session active never gets a second
+  // refreshStatus() call at all (the interval below only used to arm on
+  // isActive), leaving its elapsed time frozen until the popup is
+  // reopened.
+  if (session?.isActive || session?.reviewInProgress) {
     // Arms polling here rather than unconditionally at the bottom of this
     // file -- refreshStatus() is async, so a plain "refreshStatus();
     // setInterval(refreshStatus, 3000)" pair races: the interval gets
-    // created before this first call resolves, and if no session is
-    // active yet (the common case when the popup just opened), the
-    // else-branch below calls stopStatusPoll() and kills that interval
-    // for good -- nothing else ever called setInterval again, so starting
-    // a session from that same popup instance would leave violation
-    // count, pause state, the connection badge, and the "Allow site?"
-    // banner frozen at whatever they were the moment the session started.
-    // Arming it here instead means any refreshStatus() call that finds an
-    // active session guarantees polling is running, regardless of what
-    // order things happened in.
+    // created before this first call resolves, and if nothing is active
+    // yet (the common case when the popup just opened), the else-branch
+    // below calls stopStatusPoll() and kills that interval for good --
+    // nothing else ever called setInterval again, so starting a session
+    // from that same popup instance would leave violation count, pause
+    // state, the connection badge, and the "Allow site?" banner frozen at
+    // whatever they were the moment the session started. Arming it here
+    // instead means any refreshStatus() call that finds something running
+    // guarantees polling is running, regardless of what order things
+    // happened in.
     if (!statusPollInterval) {
       statusPollInterval = setInterval(refreshStatus, 3000);
     }
-    renderActiveSession(session);
   } else {
     stopStatusPoll();
+  }
+  if (session?.isActive) {
+    renderActiveSession(session);
+  } else {
     stopCountdown();
     showSetupView();
   }
