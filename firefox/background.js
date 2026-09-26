@@ -736,6 +736,28 @@ async function recordPendingAllowSuggestion(url) {
   });
 }
 
+async function cloakOffendingTab(tabId, violationCount) {
+  // Hard lock never touches the offending tab's own URL (see switchAway()
+  // below) -- only injecting content/cloak.js actually hides what it's
+  // sitting on from the tab strip itself (title + favicon), which a
+  // same-tab overlay/blackout never reaches once focus has moved away.
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
+    await chrome.tabs.sendMessage(tabId, { type: "cloakTab", violationCount });
+  } catch (err) {
+    console.warn("CARMEN: could not cloak the offending tab.", err);
+  }
+}
+
+async function uncloakTab(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "uncloakTab" });
+  } catch (err) {
+    // Expected/harmless when cloak.js was never injected into this tab
+    // (e.g. it was whitelisted from the start and never tripped hard lock).
+  }
+}
+
 async function handleTabUrl(tabId, url) {
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (lastHandledUrlByTab.get(tabId) === url) return;
@@ -749,6 +771,7 @@ async function handleTabUrl(tabId, url) {
   if (whitelisted) {
     lastAcceptableUrl = url;
     switchAwayAttemptsByTab.delete(tabId);
+    uncloakTab(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     if (session.source === "browser-only") return;
     if (!hadOpenViolation) return;
@@ -929,6 +952,12 @@ async function handleTabUrl(tabId, url) {
             consecutiveFailures = 0;
             switchAwayAttemptsByTab.set(tabId, (switchAwayAttemptsByTab.get(tabId) || 0) + 1);
             await clearBlackout();
+            // Re-fetched rather than reusing the `session` captured at the
+            // top of this function -- that snapshot predates the
+            // apiFetch("/violation", ...) call above incrementing the real
+            // count, so it would always be one violation behind.
+            const freshSession = await getSession();
+            await cloakOffendingTab(tabId, freshSession.violationCount);
           } catch (err) {
             if (isDragLockError(err)) {
               consecutiveFailures++;
