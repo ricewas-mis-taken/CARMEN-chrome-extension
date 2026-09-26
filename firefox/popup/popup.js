@@ -374,12 +374,15 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp) {
+function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, isBurnout) {
   stopCountdown();
   const tick = () => {
     const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
     countdownEl.textContent = formatElapsed(elapsed);
-    if (endTime - Date.now() <= 0) {
+    // Burnout sessions carry an artificial endTime ceiling (see
+    // background.js's defaultSession/getSession) that isn't a real
+    // deadline, so passing it must not end the popup's own display.
+    if (!isBurnout && endTime - Date.now() <= 0) {
       stopCountdown();
       showSetupView();
     }
@@ -442,7 +445,7 @@ function renderActiveSession(session) {
     stopCountdown();
     countdownEl.textContent = formatElapsed(activeElapsedMs);
   } else {
-    startCountdown(session.endTime, activeElapsedMs, Date.now());
+    startCountdown(session.endTime, activeElapsedMs, Date.now(), !!session.isBurnout);
   }
 }
 
