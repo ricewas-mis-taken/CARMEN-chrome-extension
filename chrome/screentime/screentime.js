@@ -174,7 +174,14 @@ function renderSections(byCategory) {
 function domainRow(domain, seconds) {
   const row = document.createElement("div");
   row.className = "domain-row";
-  row.innerHTML = `<span class="domain-name">${domain}</span><span class="domain-time">${formatDuration(seconds)}</span>`;
+  const nameEl = document.createElement("span");
+  nameEl.className = "domain-name";
+  nameEl.textContent = domain;
+  const timeEl = document.createElement("span");
+  timeEl.className = "domain-time";
+  timeEl.textContent = formatDuration(seconds);
+  row.appendChild(nameEl);
+  row.appendChild(timeEl);
   return row;
 }
 
