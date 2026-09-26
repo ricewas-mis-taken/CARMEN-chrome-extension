@@ -105,20 +105,35 @@ given moment -- that's still governed entirely by whichever single
 session session_manager reports active, per the entry above.
 
 [2026-09-26] A hard-locked tab's title/favicon are cloaked, not just its focus
-Decision: hard lock switching focus away from an offending tab (see
-background.js's switchAway()) now also injects content/cloak.js into that
-tab, which overwrites its title to "CARMEN HIDDEN (#N)" and its favicon to
-a generic lock icon, re-asserting both on a 500ms interval until the tab
-either navigates to a whitelisted URL (uncloakTab()) or is closed/reloaded.
+Decision: any tab sitting on a non-whitelisted domain while a hard-lock
+session is active and not paused/on break gets content/cloak.js injected,
+which overwrites its title to a plain "CARMEN HIDDEN" and its favicon to a
+generic lock icon, re-asserting both on a 500ms interval. background.js's
+sweepTabsForCloak() checks every tab (not just the one just redirected
+away from) on a periodic tick and on every qualifying tab-URL event, so a
+tab that lands on a bad domain in the background (window.open,
+target=_blank) without ever being focused gets caught too -- the
+extension-side equivalent of carmen-desktop's own
+sweep_minimize_blocked_windows(). Cloaks are tracked in a cloakedTabIds
+set; uncloakAllTabs() is the only way anything clears, called from exactly
+one place: sweepTabsForCloak() noticing the session ended, got paused, or
+entered a break.
 Why: hard lock never touches the offending tab's own URL, on purpose (see
 the existing comment on switchAway's else-branch) -- but that means the
 real page's title and favicon kept showing in the tab strip the whole time
 it sat there, silently advertising exactly what was being looked at even
-though the tab itself was no longer usable. The violation count in the
-cloaked title doubles as the "which violation number is this" notification
-that would otherwise need a separate popup.
-Rejected alternative: a MutationObserver on the <title> node to catch the
-page trying to change it back. Not used -- a page can also replace the
+though the tab itself was no longer usable.
+Rejected alternative #1: cloaking only the specific tab switchAway() just
+redirected away from. Not used -- a tab opened directly to a bad domain in
+the background, never focused, would never get caught at all under that
+narrower trigger.
+Rejected alternative #2: un-cloaking a tab as soon as ITS OWN url becomes
+whitelisted. Explicitly rejected -- the cloak's only two release
+conditions are the session ending or a break starting, not a single tab's
+URL at any given moment. A violation count in the title was also tried and
+dropped -- just "CARMEN HIDDEN", nothing else.
+Rejected alternative #3: a MutationObserver on the <title> node to catch
+the page trying to change it back. Not used -- a page can also replace the
 node entirely, rewrite <head> wholesale (common on SPA route changes), or
 never touch the DOM node at all (direct `document.title = ...`), so a
 simple periodic re-assertion is both less code and more reliably correct

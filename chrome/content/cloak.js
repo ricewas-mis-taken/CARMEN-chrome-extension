@@ -6,18 +6,17 @@
   // background.js's handleTabUrl) -- it only switches focus away, so that
   // tab keeps sitting there in the tab strip showing the real page's title
   // and favicon the whole time, visibly advertising what was being looked
-  // at even though it's no longer usable. This swaps both for a generic
-  // "CARMEN HIDDEN" placeholder until the tab is either navigated to a
-  // whitelisted URL or reloaded/closed.
-  const CLOAK_TITLE_BASE = "CARMEN HIDDEN";
+  // at even though it's no longer usable. This swaps both for a plain
+  // "CARMEN HIDDEN" placeholder for as long as background.js considers this
+  // tab cloaked (see its sweepTabsForCloak()/uncloakAllTabs()) -- not
+  // cleared just because the tab becomes whitelisted; only a break starting
+  // or the session ending un-cloaks anything, so this stays as-is
+  // regardless of what the page itself does.
+  const CLOAK_TITLE = "CARMEN HIDDEN";
   let cloaked = false;
   let reassertTimer = null;
   let originalTitle = null;
   let originalFavicons = null;
-
-  function buildCloakTitle(violationCount) {
-    return violationCount ? `${CLOAK_TITLE_BASE} (#${violationCount})` : CLOAK_TITLE_BASE;
-  }
 
   const LOCK_FAVICON =
     "data:image/svg+xml," +
@@ -57,13 +56,12 @@
     originalFavicons = null;
   }
 
-  function cloak(violationCount) {
+  function cloak() {
     if (!cloaked) {
       originalTitle = document.title;
       cloaked = true;
     }
-    const target = buildCloakTitle(violationCount);
-    document.title = target;
+    document.title = CLOAK_TITLE;
     applyCloakFavicon();
     // Re-asserted on an interval rather than fighting a MutationObserver
     // against every possible way a page can change its own title (direct
@@ -73,7 +71,7 @@
     // meaningful stretch.
     if (reassertTimer) clearInterval(reassertTimer);
     reassertTimer = setInterval(() => {
-      if (document.title !== target) document.title = target;
+      if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
     }, 500);
   }
 
@@ -90,7 +88,7 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "cloakTab") {
-      cloak(message.violationCount);
+      cloak();
     } else if (message?.type === "uncloakTab") {
       uncloak();
     }

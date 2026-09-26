@@ -736,25 +736,72 @@ async function recordPendingAllowSuggestion(url) {
   });
 }
 
-async function cloakOffendingTab(tabId, violationCount) {
+// Every tab this session currently considers cloaked -- the only record of
+// "was this cloaked," since cloak.js's own in-page state disappears the
+// instant that tab reloads or navigates. Used so uncloakAllTabs() knows
+// which tabs to message, and so sweepTabsForCloak() doesn't re-inject +
+// re-message a tab that's already cloaked every single sweep.
+const cloakedTabIds = new Set();
+
+async function cloakOffendingTab(tabId) {
   // Hard lock never touches the offending tab's own URL (see switchAway()
   // below) -- only injecting content/cloak.js actually hides what it's
   // sitting on from the tab strip itself (title + favicon), which a
   // same-tab overlay/blackout never reaches once focus has moved away.
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
-    await chrome.tabs.sendMessage(tabId, { type: "cloakTab", violationCount });
+    await browser.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
+    await browser.tabs.sendMessage(tabId, { type: "cloakTab" });
+    cloakedTabIds.add(tabId);
   } catch (err) {
     console.warn("CARMEN: could not cloak the offending tab.", err);
   }
 }
 
-async function uncloakTab(tabId) {
+async function uncloakAllTabs() {
+  // The ONLY two things that ever clear a cloak -- see sweepTabsForCloak()'s
+  // own call sites. Navigating the cloaked tab to a whitelisted URL does
+  // NOT uncloak it on its own; a cloak only ever lifts because enforcement
+  // itself stopped (break or session end), never because of what a single
+  // tab's URL happens to be at the moment.
+  const tabIds = Array.from(cloakedTabIds);
+  cloakedTabIds.clear();
+  for (const tabId of tabIds) {
+    try {
+      await browser.tabs.sendMessage(tabId, { type: "uncloakTab" });
+    } catch (err) {
+      // Expected/harmless if the tab already closed or reloaded (cloak.js's
+      // own in-page state, and so its listener, wouldn't exist anymore).
+    }
+  }
+}
+
+async function sweepTabsForCloak() {
+  // The extension-side equivalent of carmen-desktop's own
+  // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
+  // only ever reacts to whichever tab is (or just became) active, so a tab
+  // that lands on a non-whitelisted domain in the background (opened via
+  // window.open, a link with target=_blank, etc.) without ever being
+  // focused would otherwise never get cloaked at all.
+  const session = await getSession();
+  if (!session.isActive || session.isPaused || session.isBreak) {
+    if (cloakedTabIds.size) await uncloakAllTabs();
+    return;
+  }
+  if (session.lockMode !== "hard") return;
+
+  let tabs;
   try {
-    await chrome.tabs.sendMessage(tabId, { type: "uncloakTab" });
+    tabs = await browser.tabs.query({});
   } catch (err) {
-    // Expected/harmless when cloak.js was never injected into this tab
-    // (e.g. it was whitelisted from the start and never tripped hard lock).
+    return;
+  }
+  for (const tab of tabs) {
+    if (tab.active) continue;
+    if (!tab.url || !/^https?:\/\//i.test(tab.url)) continue;
+    if (isWhitelisted(tab.url, session.domainWhitelist)) continue;
+    if (!cloakedTabIds.has(tab.id)) {
+      await cloakOffendingTab(tab.id);
+    }
   }
 }
 
@@ -762,6 +809,13 @@ async function handleTabUrl(tabId, url) {
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (lastHandledUrlByTab.get(tabId) === url) return;
   lastHandledUrlByTab.set(tabId, url);
+
+  // Runs on every qualifying tab-URL event, not just this one tab's own
+  // handling below -- catches a DIFFERENT tab that landed on a
+  // non-whitelisted domain in the background (window.open, a
+  // target=_blank link) without waiting for the next periodic
+  // sweepTabsForCloak() tick. See that function for the full policy.
+  sweepTabsForCloak();
 
   const session = await getSession();
   if (!session.isActive || session.isPaused || session.isBreak) return;
@@ -771,7 +825,6 @@ async function handleTabUrl(tabId, url) {
   if (whitelisted) {
     lastAcceptableUrl = url;
     switchAwayAttemptsByTab.delete(tabId);
-    uncloakTab(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     if (session.source === "browser-only") return;
     if (!hadOpenViolation) return;
@@ -952,12 +1005,11 @@ async function handleTabUrl(tabId, url) {
             consecutiveFailures = 0;
             switchAwayAttemptsByTab.set(tabId, (switchAwayAttemptsByTab.get(tabId) || 0) + 1);
             await clearBlackout();
-            // Re-fetched rather than reusing the `session` captured at the
-            // top of this function -- that snapshot predates the
-            // apiFetch("/violation", ...) call above incrementing the real
-            // count, so it would always be one violation behind.
-            const freshSession = await getSession();
-            await cloakOffendingTab(tabId, freshSession.violationCount);
+            // Cloaks this tab immediately rather than waiting for the next
+            // periodic sweepTabsForCloak() tick -- it's already known to be
+            // exactly the case that function looks for (inactive, hard
+            // lock, non-whitelisted), no need to wait.
+            await cloakOffendingTab(tabId);
           } catch (err) {
             if (isDragLockError(err)) {
               consecutiveFailures++;
@@ -1067,6 +1119,7 @@ browser.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
   tabLastActiveAt.delete(tabId);
+  cloakedTabIds.delete(tabId);
 
   browser.storage.local.get(SCREEN_TIME_CURRENT_KEY).then((data) => {
     if (data[SCREEN_TIME_CURRENT_KEY]?.tabId === tabId) {
@@ -1205,6 +1258,14 @@ startPolling({
 // makes no network request of its own).
 updateSyncBadge();
 setInterval(updateSyncBadge, POLL_INTERVAL_MS);
+
+// Safety net alongside the immediate call inside handleTabUrl -- catches a
+// background tab that landed on a non-whitelisted domain some other way
+// (e.g. a page navigating itself via history/location APIs in a way that
+// didn't route through this session's own event handlers), and is also
+// what actually notices "the break/session just ended" in time to
+// uncloakAllTabs() -- see sweepTabsForCloak()'s own early-return branch.
+setInterval(sweepTabsForCloak, POLL_INTERVAL_MS);
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
