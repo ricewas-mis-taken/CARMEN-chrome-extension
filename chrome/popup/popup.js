@@ -457,17 +457,17 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, isBurnout) {
+function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
   stopCountdown();
   const tick = () => {
-    // Burnout sessions carry an artificial endTime ceiling (see
-    // background.js's defaultSession/getSession) that isn't a real
-    // deadline -- counting up from start is the only display that makes
-    // sense for them. Every other session type (manual, task, pomodoro,
-    // review, calendar-event) has a real deadline, so it counts DOWN to
-    // it instead -- counting up there would show the wrong thing entirely,
-    // not just a cosmetic mismatch.
-    if (isBurnout) {
+    // Burnout sessions, and a review driving its own session (source ===
+    // "review" -- see renderActiveSession), both carry an artificial
+    // endTime ceiling that isn't a real deadline -- counting up from start
+    // is the only display that makes sense for them. Every other session
+    // type (manual, task, pomodoro, calendar-event) has a real deadline,
+    // so it counts DOWN to it instead -- counting up there would show the
+    // wrong thing entirely, not just a cosmetic mismatch.
+    if (hasNoRealDeadline) {
       const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
       countdownEl.textContent = formatElapsed(elapsed);
     } else {
@@ -552,12 +552,20 @@ function renderActiveSession(session) {
 
   browserOnlyRowEl.classList.toggle("hidden", session.source !== "browser-only");
 
-  countdownLabelEl.textContent = session.isBurnout ? "Time elapsed" : "Time left";
+  // A review driving its own session (source === "review" -- see
+  // carmen-desktop's review_tab.py starting it with
+  // duration_minutes=tasks_store.BURNOUT_MINUTES, since a review has no
+  // fixed length either) has exactly the same "artificial multi-hour
+  // ceiling, not a real deadline" shape as an actual burnout session, and
+  // must count up for the same reason -- counting DOWN from ~8 hours reads
+  // as a real, very long timer instead of what it actually is.
+  const hasNoRealDeadline = session.isBurnout || session.source === "review";
+  countdownLabelEl.textContent = hasNoRealDeadline ? "Time elapsed" : "Time left";
 
   const activeElapsedMs = session.activeElapsedMs || 0;
   if (session.isPaused) {
     stopCountdown();
-    const pausedText = session.isBurnout
+    const pausedText = hasNoRealDeadline
       ? formatElapsed(activeElapsedMs)
       : formatElapsed(Math.max(0, session.endTime - Date.now()));
     countdownEl.textContent = pausedText;
@@ -565,7 +573,7 @@ function renderActiveSession(session) {
       pomodoroChipTimeEl.textContent = pausedText;
     }
   } else {
-    startCountdown(session.endTime, activeElapsedMs, Date.now(), !!session.isBurnout);
+    startCountdown(session.endTime, activeElapsedMs, Date.now(), hasNoRealDeadline);
   }
 }
 

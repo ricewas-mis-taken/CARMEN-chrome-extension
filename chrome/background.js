@@ -1048,13 +1048,17 @@ async function handleTabUrl(tabId, url) {
       target: { tabId },
       files: ["content/overlay.js"],
     });
-    // A burnout session ("Until I burnout") runs under an artificial 8-hour
-    // ceiling on the desktop side -- showing that as "7h 58m left in this
-    // session" reads as a real deadline that doesn't exist. Show elapsed
-    // time instead, same distinction the popup's own countdown already
-    // makes (see popup.js's renderActiveSession).
-    const overlayMessage = session.isBurnout
-      ? `Until burnout — ${formatDurationSeconds(session.activeElapsedMs / 1000)} elapsed`
+    // A burnout session ("Until I burnout") and a review driving its own
+    // session (source === "review" -- see carmen-desktop's review_tab.py
+    // starting it with duration_minutes=tasks_store.BURNOUT_MINUTES, since
+    // a review has no fixed length either) both run under an artificial
+    // multi-hour ceiling on the desktop side -- showing that as "7h 58m
+    // left in this session" reads as a real deadline that doesn't exist.
+    // Show elapsed time instead, same distinction the popup's own
+    // countdown already makes (see popup.js's renderActiveSession).
+    const hasNoRealDeadline = session.isBurnout || session.source === "review";
+    const overlayMessage = hasNoRealDeadline
+      ? `${formatDurationSeconds(session.activeElapsedMs / 1000)} elapsed in this session`
       : `${formatTimeRemaining(session.endTime)} left in this session`;
     await chrome.tabs.sendMessage(tabId, {
       type: "showOverlay",
