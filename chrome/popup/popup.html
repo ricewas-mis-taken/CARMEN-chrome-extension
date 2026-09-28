@@ -7,20 +7,31 @@
   </head>
   <body>
     <div id="app">
-      <div class="review-progress-banner hidden" id="review-progress-banner">
-        <span class="review-progress-icon">🔁</span>
-        <div class="review-progress-text">
-          <div class="review-progress-title" id="review-progress-title"></div>
-          <div class="review-progress-elapsed" id="review-progress-elapsed"></div>
+      <header class="header">
+        <div class="logo-dot"></div>
+        <h1>CARMEN</h1>
+      </header>
+
+      <div class="info-chip review-chip hidden" id="review-progress-banner">
+        <div class="info-chip-row" id="review-progress-row">
+          <span class="review-progress-icon">🔁</span>
+          <span class="info-chip-label" id="review-progress-title"></span>
+          <span class="info-chip-time" id="review-progress-elapsed"></span>
+          <span class="info-chip-chevron">▾</span>
+        </div>
+        <div class="review-progress-paused-line hidden" id="review-progress-paused-line"></div>
+        <div class="info-chip-detail hidden" id="review-progress-detail">
+          <div class="review-info-line">
+            <span class="review-info-label">Subject</span>
+            <span id="review-progress-subject"></span>
+          </div>
+          <button type="button" class="secondary-btn review-progress-pause-btn" id="review-progress-pause-btn">
+            Pause
+          </button>
         </div>
       </div>
 
       <section id="setup-view" class="view">
-        <header class="header">
-          <div class="logo-dot"></div>
-          <h1>CARMEN</h1>
-        </header>
-
         <div class="field">
           <label>Duration</label>
           <div class="preset-row">
@@ -124,11 +135,6 @@
           </div>
         </div>
 
-        <header class="header">
-          <div class="logo-dot"></div>
-          <h1>CARMEN</h1>
-        </header>
-
         <div class="countdown-label" id="countdown-label">Time left</div>
         <div class="countdown" id="countdown">00:00</div>
 
@@ -143,14 +149,17 @@
           <span class="event-source-title" id="event-source-title"></span>
         </div>
 
-        <div class="pomodoro-info hidden" id="pomodoro-info">
-          <div class="review-info-line">
-            <span class="review-info-label">Pomodoro</span>
-            <span id="pomodoro-phase-text"></span>
+        <div class="info-chip hidden" id="pomodoro-info">
+          <div class="info-chip-row" id="pomodoro-chip-row">
+            <span class="info-chip-label">Pomodoro</span>
+            <span class="info-chip-time" id="pomodoro-chip-time"></span>
+            <span class="info-chip-chevron">▾</span>
           </div>
-          <div class="review-info-line">
-            <span class="review-info-label">Cycle</span>
-            <span id="pomodoro-cycle-text"></span>
+          <div class="info-chip-detail hidden" id="pomodoro-chip-detail">
+            <div class="review-info-line">
+              <span class="review-info-label">Cycle</span>
+              <span id="pomodoro-cycle-text"></span>
+            </div>
           </div>
         </div>
 

@@ -19,31 +19,83 @@ body {
   display: none !important;
 }
 
-.review-progress-banner {
+/* Generic "small box that expands into details" pattern -- used by the
+   pomodoro chip and the review chip. Collapsed state is one row: a short
+   label, a big prominent time, and a chevron; clicking it toggles
+   .info-chip-detail. */
+.info-chip {
+  border-radius: 12px;
+  border: 1.5px solid #d9e2e5;
+  background: #fafbfc;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.info-chip-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 12px;
-  margin-bottom: 14px;
-  border-radius: 12px;
-  border: 1.5px solid #f0d38a;
-  background: linear-gradient(135deg, #fff8e8, #fffdf6);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.info-chip-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #52606d;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-chip-time {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2933;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.info-chip-chevron {
+  font-size: 10px;
+  color: #9aa5b1;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.info-chip.expanded .info-chip-chevron {
+  transform: rotate(180deg);
+}
+
+.info-chip-detail {
+  padding: 0 12px 10px;
+}
+
+.review-chip {
+  border-color: color-mix(in srgb, var(--review-color, #f0d38a) 55%, #d9e2e5);
+  background: color-mix(in srgb, var(--review-color, #f0d38a) 12%, #fafbfc);
 }
 
 .review-progress-icon {
-  font-size: 16px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 
-.review-progress-title {
-  font-size: 12px;
+.review-progress-paused-line {
+  padding: 0 12px 8px;
+  margin-top: -6px;
+  font-size: 11px;
   font-weight: 600;
-  color: #7a5a12;
+  color: #a3821f;
 }
 
-.review-progress-elapsed {
-  font-size: 11px;
-  color: #a3821f;
+.review-progress-pause-btn {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .header {
@@ -352,8 +404,7 @@ textarea#whitelist:focus {
   white-space: nowrap;
 }
 
-.review-info,
-.pomodoro-info {
+.review-info {
   background: #f4f6f7;
   border-radius: 10px;
   padding: 10px 12px;
