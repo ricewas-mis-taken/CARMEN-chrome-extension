@@ -8,10 +8,12 @@
   // and favicon the whole time, visibly advertising what was being looked
   // at even though it's no longer usable. This swaps both for a plain
   // "CARMEN HIDDEN" placeholder for as long as background.js considers this
-  // tab cloaked (see its sweepTabsForCloak()/uncloakAllTabs()) -- not
-  // cleared just because the tab becomes whitelisted; only a break starting
-  // or the session ending un-cloaks anything, so this stays as-is
-  // regardless of what the page itself does.
+  // tab cloaked (see its sweepTabsForCloak()/uncloakAllTabs()) -- uncloaked
+  // when this specific tab's own domain becomes whitelisted mid-session
+  // (checked both instantly in handleTabUrl and as a safety net on every
+  // sweepTabsForCloak() tick), when a break starts, or when the session
+  // ends, so this stays as-is regardless of what the page itself does
+  // otherwise.
   const CLOAK_TITLE = "CARMEN HIDDEN";
   let cloaked = false;
   let reassertTimer = null;
