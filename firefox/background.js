@@ -14,6 +14,12 @@ const API_BASE = "http://127.0.0.1:5847";
 const API_TIMEOUT_MS = 5000;
 const ALARM_NAME = "focusSessionEnd";
 
+// The endTime browser.alarms is currently armed against for a desktop-backed
+// session (0 when nothing is armed) -- see reconcileAlarmWithSession() below
+// and DESIGN_DECISIONS.txt, [2026-09-28], for why the alarm firing can never
+// be trusted on its own to mean the session actually ended.
+let lastArmedAlarmEndTime = 0;
+
 function defaultSession() {
   return {
     isActive: false,
@@ -774,6 +780,35 @@ async function uncloakAllTabs() {
   }
 }
 
+// Keeps browser.alarms in sync with whatever endTime the desktop is
+// *currently* reporting for a desktop-backed session -- called from every
+// place this file already fetches a fresh getSession() on some regular
+// cadence (sweepTabsForCloak's own periodic tick below), so a desktop-driven
+// pause, resume, or pomodoro phase change is picked up here well before a
+// stale alarm armed against the old endTime would otherwise fire. See
+// onAlarm's ALARM_NAME branch and DESIGN_DECISIONS.txt, [2026-09-28], for why
+// the alarm itself is never allowed to unilaterally decide a session ended.
+async function reconcileAlarmWithSession(session) {
+  // A browser-only session's alarm is fully self-managed by this file's own
+  // startSession/pauseSession/resumeSession/endSession handlers already --
+  // there's no external actor that could move its endTime without going
+  // through one of those, so there's nothing to reconcile here.
+  if (session.source === "browser-only") return;
+
+  if (!session.isActive || session.isPaused) {
+    if (lastArmedAlarmEndTime !== 0) {
+      lastArmedAlarmEndTime = 0;
+      await browser.alarms.clear(ALARM_NAME);
+    }
+    return;
+  }
+
+  if (session.endTime && session.endTime !== lastArmedAlarmEndTime) {
+    lastArmedAlarmEndTime = session.endTime;
+    browser.alarms.create(ALARM_NAME, { when: session.endTime });
+  }
+}
+
 async function sweepTabsForCloak() {
   // The extension-side equivalent of carmen-desktop's own
   // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
@@ -782,6 +817,11 @@ async function sweepTabsForCloak() {
   // window.open, a link with target=_blank, etc.) without ever being
   // focused would otherwise never get cloaked at all.
   const session = await getSession();
+  // Runs regardless of lock mode/pause/break -- this is this file's own
+  // regular status-polling path (see the setInterval(sweepTabsForCloak, ...)
+  // below), and reconciling the alarm needs to happen on every tick, not
+  // just while hard lock is enforced.
+  await reconcileAlarmWithSession(session);
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
     if (cloakedTabIds.size) await uncloakAllTabs();
     return;
@@ -1231,13 +1271,36 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   if (alarm.name === ALARM_NAME) {
-    lastAcceptableUrl = "";
     const local = await getLocalSession();
     if (local.isActive) {
+      lastAcceptableUrl = "";
       await setLocalSession(defaultLocalSession());
       notifyLocalSessionComplete(local);
       return;
     }
+
+    // The alarm firing only means "the endTime we last armed it against has
+    // passed" -- never, on its own, that the session actually ended. It
+    // could be stale: the desktop already rolled a pomodoro to its next
+    // phase/break (a fresh endTime), or the session was paused/resumed from
+    // the desktop side, neither of which this extension's own alarm
+    // necessarily heard about yet. Ask the desktop for its current status --
+    // GET /status is itself what naturally finalizes a truly-expired session
+    // or advances a pomodoro phase server-side (see carmen-desktop's
+    // _get_status_locked) -- and only treat this as a real end if the
+    // desktop confirms it. See DESIGN_DECISIONS.txt, [2026-09-28].
+    const session = await getSession();
+    await reconcileAlarmWithSession(session);
+    if (session.isActive) {
+      // Still active from the desktop's point of view -- reconcile above
+      // already re-armed (new phase/resume) or cleared (paused) the alarm
+      // as appropriate. Nothing else to do; in particular, never POST
+      // /session/end or show the completion notification for a session
+      // that's still genuinely running.
+      return;
+    }
+
+    lastAcceptableUrl = "";
     try {
       await apiFetch("/session/end", { method: "POST" });
     } catch (err) {
