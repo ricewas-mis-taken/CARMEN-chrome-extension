@@ -606,18 +606,21 @@ function screenTimeDomainForUrl(url) {
   return getHostname(url);
 }
 
-async function addScreenTimeSeconds(domain, seconds) {
+// Caller must already hold the storage lock (see withStorageLock) --
+// checkpointScreenTime below is the only caller, and it acquires the lock
+// itself around this AND its own SCREEN_TIME_CURRENT_KEY read-modify-write
+// together, so this can't also take the lock without deadlocking against
+// itself (withStorageLock's single queue isn't reentrant).
+async function addScreenTimeSecondsLocked(domain, seconds) {
   if (!domain || seconds <= 0) return;
   seconds = Math.min(seconds, SCREEN_TIME_MAX_LEG_SECONDS);
-  await withStorageLock(async () => {
-    const data = await browser.storage.local.get(SCREEN_TIME_DAY_KEY);
-    const byDay = data[SCREEN_TIME_DAY_KEY] || {};
-    const day = screenTimeDayKey();
-    const bucket = byDay[day] || {};
-    bucket[domain] = (bucket[domain] || 0) + seconds;
-    byDay[day] = bucket;
-    await browser.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
-  });
+  const data = await browser.storage.local.get(SCREEN_TIME_DAY_KEY);
+  const byDay = data[SCREEN_TIME_DAY_KEY] || {};
+  const day = screenTimeDayKey();
+  const bucket = byDay[day] || {};
+  bucket[domain] = (bucket[domain] || 0) + seconds;
+  byDay[day] = bucket;
+  await browser.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
   // Best-effort -- desktop being unreachable (or simply not paired) must
   // never break local tracking, which is why this isn't awaited by callers.
   apiFetch("/screentime/domain", {
@@ -633,20 +636,30 @@ async function addScreenTimeSeconds(domain, seconds) {
 // long-lived leg without waiting for it to end. Flushes whatever was being
 // timed, then starts timing newDomain (or stops timing anything, if null --
 // the browser lost focus, or the active tab isn't a real website).
+//
+// Wrapped in the same withStorageLock helper every other read-modify-write
+// in this file already uses -- browser.tabs.onActivated, windows.onFocusChanged,
+// and the once-a-minute SCREEN_TIME_ALARM_NAME checkpoint can all fire close
+// together and race on SCREEN_TIME_CURRENT_KEY, each reading the same
+// `current` leg and separately flushing its elapsed time, double-counting
+// a few seconds. Locking the whole read-current -> flush -> write-new
+// sequence as one atomic unit closes that.
 async function checkpointScreenTime(newDomain, newTabId = null) {
-  const data = await browser.storage.local.get(SCREEN_TIME_CURRENT_KEY);
-  const current = data[SCREEN_TIME_CURRENT_KEY];
-  const now = Date.now();
-  if (current && current.domain) {
-    await addScreenTimeSeconds(current.domain, (now - current.startedAt) / 1000);
-  }
-  if (newDomain) {
-    await browser.storage.local.set({
-      [SCREEN_TIME_CURRENT_KEY]: { domain: newDomain, tabId: newTabId, startedAt: now },
-    });
-  } else {
-    await browser.storage.local.set({ [SCREEN_TIME_CURRENT_KEY]: null });
-  }
+  return withStorageLock(async () => {
+    const data = await browser.storage.local.get(SCREEN_TIME_CURRENT_KEY);
+    const current = data[SCREEN_TIME_CURRENT_KEY];
+    const now = Date.now();
+    if (current && current.domain) {
+      await addScreenTimeSecondsLocked(current.domain, (now - current.startedAt) / 1000);
+    }
+    if (newDomain) {
+      await browser.storage.local.set({
+        [SCREEN_TIME_CURRENT_KEY]: { domain: newDomain, tabId: newTabId, startedAt: now },
+      });
+    } else {
+      await browser.storage.local.set({ [SCREEN_TIME_CURRENT_KEY]: null });
+    }
+  });
 }
 
 // storage.local key for the popup's "Allow this site?" banner (see
