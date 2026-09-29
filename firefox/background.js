@@ -861,13 +861,24 @@ async function sweepTabsForCloak() {
     }
   }
 
+  // Always (re-)cloak every qualifying tab, regardless of cloakedTabIds
+  // membership -- a cloaked tab can silently redirect to a DIFFERENT
+  // non-whitelisted page (meta-refresh, SPA route change, ad redirect
+  // chain) whose own content/cloak.js hasn't run yet, so it briefly shows
+  // its real title/favicon while cloakedTabIds still has a stale entry from
+  // before the redirect, making this sweep think it's already handled and
+  // skip it forever. cloak.js's own cloak() is idempotent (re-asserting the
+  // same title/favicon on an already-cloaked tab is a no-op in effect, and
+  // it never re-captures "CARMEN HIDDEN" as the original title/favicon to
+  // restore later), so unconditionally re-applying here is safe.
+  // cloakedTabIds is still used for the bookkeeping above (uncloak-on-
+  // whitelist) and in uncloakAllTabs() -- just no longer as a gate that
+  // *prevents* cloaking.
   for (const tab of tabs) {
     if (tab.active) continue;
     if (!tab.url || !/^https?:\/\//i.test(tab.url)) continue;
     if (isWhitelisted(tab.url, session.domainWhitelist)) continue;
-    if (!cloakedTabIds.has(tab.id)) {
-      await cloakOffendingTab(tab.id);
-    }
+    await cloakOffendingTab(tab.id);
   }
 }
 
