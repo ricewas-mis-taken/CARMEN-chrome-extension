@@ -482,8 +482,19 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
         pomodoroChipTimeEl.textContent = formatElapsed(msRemaining);
       }
       if (msRemaining <= 0) {
+        // Don't assume the session is over just because the LOCAL countdown
+        // hit zero -- during a pomodoro, endTime is only the current
+        // phase's own deadline (see renderActiveSession), so every phase
+        // boundary (focus -> break, break -> next focus) hits this exact
+        // branch well before the next scheduled status poll confirms the
+        // desktop already rolled to the next phase. Immediately calling
+        // showSetupView() here used to flash the popup to "no session
+        // running" for a few seconds at every single phase change. Trigger
+        // an immediate status refresh instead and let ITS own isActive
+        // check decide -- showSetupView() only if the session is genuinely
+        // over, otherwise refreshStatus() re-renders the new phase/endTime.
         stopCountdown();
-        showSetupView();
+        refreshStatus();
       }
     }
   };
