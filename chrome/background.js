@@ -850,6 +850,26 @@ async function handleTabUrl(tabId, url) {
     return;
   }
 
+  // The desktop tracks only ONE open violation per kind at a time (see
+  // session_manager.py's _open_violation_index) -- reporting one from here
+  // must only ever happen for the tab the user is actually looking at.
+  // This active-tab check used to run AFTER the violation-reporting POST
+  // below, so a background/non-active tab could also trigger a report:
+  // two different tabs going bad in sequence would then make the desktop
+  // resolve the wrong one's entry once the user eventually left either tab.
+  // Moved up here, before violation reporting, while everything above this
+  // point (sweepTabsForCloak's own background-tab cloaking, and the
+  // whitelisted branch's uncloak/resolve handling above) is deliberately
+  // left able to run for a non-active tab -- only the report itself needs
+  // this guard.
+  let currentTab;
+  try {
+    currentTab = await chrome.tabs.get(tabId);
+  } catch (err) {
+    return;
+  }
+  if (!currentTab.active) return;
+
   if (!openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
     if (session.source === "browser-only") {
@@ -880,14 +900,6 @@ async function handleTabUrl(tabId, url) {
       }
     }
   }
-
-  let currentTab;
-  try {
-    currentTab = await chrome.tabs.get(tabId);
-  } catch (err) {
-    return;
-  }
-  if (!currentTab.active) return;
 
   if (session.lockMode === "hard") {
     await recordPendingAllowSuggestion(url);
