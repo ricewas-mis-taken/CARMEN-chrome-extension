@@ -364,10 +364,25 @@ screenTimeBtn.addEventListener("click", () => {
 });
 
 nuclearBtn.addEventListener("click", async () => {
-  await browser.runtime.sendMessage({ type: "endSession" });
-  stopStatusPoll();
-  stopCountdown();
-  showSetupView();
+  nuclearBtn.disabled = true;
+  const response = await browser.runtime.sendMessage({ type: "endSession" });
+  nuclearBtn.disabled = false;
+  if (response?.ok) {
+    stopStatusPoll();
+    stopCountdown();
+    showSetupView();
+  } else {
+    // The desktop can be unreachable (see background.js's endSession
+    // handler, which returns { ok: false, error } in that case) -- the
+    // session is presumably still running there, so tearing down this
+    // popup's active-session view would be a lie. Same inline-error
+    // pattern pauseBtn/reviewProgressPauseBtn already use elsewhere in
+    // this file.
+    nuclearBtn.textContent = "Desktop app unreachable — try again";
+    setTimeout(() => {
+      nuclearBtn.textContent = "Nuclear — End Session Now";
+    }, 2500);
+  }
 });
 
 let pendingAddSiteDomain = null;
