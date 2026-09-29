@@ -7,6 +7,12 @@ const API_BASE = "http://127.0.0.1:5847";
 const API_TIMEOUT_MS = 5000;
 const ALARM_NAME = "focusSessionEnd";
 
+// The endTime chrome.alarms is currently armed against for a desktop-backed
+// session (0 when nothing is armed) -- see reconcileAlarmWithSession() below
+// and DESIGN_DECISIONS.txt, [2026-09-28], for why the alarm firing can never
+// be trusted on its own to mean the session actually ended.
+let lastArmedAlarmEndTime = 0;
+
 function defaultSession() {
   return {
     isActive: false,
@@ -593,18 +599,21 @@ function screenTimeDomainForUrl(url) {
   return getHostname(url);
 }
 
-async function addScreenTimeSeconds(domain, seconds) {
+// Caller must already hold the storage lock (see withStorageLock) --
+// checkpointScreenTime below is the only caller, and it acquires the lock
+// itself around this AND its own SCREEN_TIME_CURRENT_KEY read-modify-write
+// together, so this can't also take the lock without deadlocking against
+// itself (withStorageLock's single queue isn't reentrant).
+async function addScreenTimeSecondsLocked(domain, seconds) {
   if (!domain || seconds <= 0) return;
   seconds = Math.min(seconds, SCREEN_TIME_MAX_LEG_SECONDS);
-  await withStorageLock(async () => {
-    const data = await chrome.storage.local.get(SCREEN_TIME_DAY_KEY);
-    const byDay = data[SCREEN_TIME_DAY_KEY] || {};
-    const day = screenTimeDayKey();
-    const bucket = byDay[day] || {};
-    bucket[domain] = (bucket[domain] || 0) + seconds;
-    byDay[day] = bucket;
-    await chrome.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
-  });
+  const data = await chrome.storage.local.get(SCREEN_TIME_DAY_KEY);
+  const byDay = data[SCREEN_TIME_DAY_KEY] || {};
+  const day = screenTimeDayKey();
+  const bucket = byDay[day] || {};
+  bucket[domain] = (bucket[domain] || 0) + seconds;
+  byDay[day] = bucket;
+  await chrome.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
   // Best-effort -- desktop being unreachable (or simply not paired) must
   // never break local tracking, which is why this isn't awaited by callers.
   apiFetch("/screentime/domain", {
@@ -620,20 +629,30 @@ async function addScreenTimeSeconds(domain, seconds) {
 // long-lived leg without waiting for it to end. Flushes whatever was being
 // timed, then starts timing newDomain (or stops timing anything, if null --
 // the browser lost focus, or the active tab isn't a real website).
+//
+// Wrapped in the same withStorageLock helper every other read-modify-write
+// in this file already uses -- chrome.tabs.onActivated, windows.onFocusChanged,
+// and the once-a-minute SCREEN_TIME_ALARM_NAME checkpoint can all fire close
+// together and race on SCREEN_TIME_CURRENT_KEY, each reading the same
+// `current` leg and separately flushing its elapsed time, double-counting
+// a few seconds. Locking the whole read-current -> flush -> write-new
+// sequence as one atomic unit closes that.
 async function checkpointScreenTime(newDomain, newTabId = null) {
-  const data = await chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY);
-  const current = data[SCREEN_TIME_CURRENT_KEY];
-  const now = Date.now();
-  if (current && current.domain) {
-    await addScreenTimeSeconds(current.domain, (now - current.startedAt) / 1000);
-  }
-  if (newDomain) {
-    await chrome.storage.local.set({
-      [SCREEN_TIME_CURRENT_KEY]: { domain: newDomain, tabId: newTabId, startedAt: now },
-    });
-  } else {
-    await chrome.storage.local.set({ [SCREEN_TIME_CURRENT_KEY]: null });
-  }
+  return withStorageLock(async () => {
+    const data = await chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY);
+    const current = data[SCREEN_TIME_CURRENT_KEY];
+    const now = Date.now();
+    if (current && current.domain) {
+      await addScreenTimeSecondsLocked(current.domain, (now - current.startedAt) / 1000);
+    }
+    if (newDomain) {
+      await chrome.storage.local.set({
+        [SCREEN_TIME_CURRENT_KEY]: { domain: newDomain, tabId: newTabId, startedAt: now },
+      });
+    } else {
+      await chrome.storage.local.set({ [SCREEN_TIME_CURRENT_KEY]: null });
+    }
+  });
 }
 
 // storage.local key for the popup's "Allow this site?" banner (see
@@ -767,6 +786,35 @@ async function uncloakAllTabs() {
   }
 }
 
+// Keeps chrome.alarms in sync with whatever endTime the desktop is
+// *currently* reporting for a desktop-backed session -- called from every
+// place this file already fetches a fresh getSession() on some regular
+// cadence (sweepTabsForCloak's own periodic tick below), so a desktop-driven
+// pause, resume, or pomodoro phase change is picked up here well before a
+// stale alarm armed against the old endTime would otherwise fire. See
+// onAlarm's ALARM_NAME branch and DESIGN_DECISIONS.txt, [2026-09-28], for why
+// the alarm itself is never allowed to unilaterally decide a session ended.
+async function reconcileAlarmWithSession(session) {
+  // A browser-only session's alarm is fully self-managed by this file's own
+  // startSession/pauseSession/resumeSession/endSession handlers already --
+  // there's no external actor that could move its endTime without going
+  // through one of those, so there's nothing to reconcile here.
+  if (session.source === "browser-only") return;
+
+  if (!session.isActive || session.isPaused) {
+    if (lastArmedAlarmEndTime !== 0) {
+      lastArmedAlarmEndTime = 0;
+      await chrome.alarms.clear(ALARM_NAME);
+    }
+    return;
+  }
+
+  if (session.endTime && session.endTime !== lastArmedAlarmEndTime) {
+    lastArmedAlarmEndTime = session.endTime;
+    chrome.alarms.create(ALARM_NAME, { when: session.endTime });
+  }
+}
+
 async function sweepTabsForCloak() {
   // The extension-side equivalent of carmen-desktop's own
   // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
@@ -775,6 +823,11 @@ async function sweepTabsForCloak() {
   // window.open, a link with target=_blank, etc.) without ever being
   // focused would otherwise never get cloaked at all.
   const session = await getSession();
+  // Runs regardless of lock mode/pause/break -- this is this file's own
+  // regular status-polling path (see the setInterval(sweepTabsForCloak, ...)
+  // below), and reconciling the alarm needs to happen on every tick, not
+  // just while hard lock is enforced.
+  await reconcileAlarmWithSession(session);
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
     if (cloakedTabIds.size) await uncloakAllTabs();
     return;
@@ -1224,13 +1277,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   if (alarm.name === ALARM_NAME) {
-    lastAcceptableUrl = "";
     const local = await getLocalSession();
     if (local.isActive) {
+      lastAcceptableUrl = "";
       await setLocalSession(defaultLocalSession());
       notifyLocalSessionComplete(local);
       return;
     }
+
+    // The alarm firing only means "the endTime we last armed it against has
+    // passed" -- never, on its own, that the session actually ended. It
+    // could be stale: the desktop already rolled a pomodoro to its next
+    // phase/break (a fresh endTime), or the session was paused/resumed from
+    // the desktop side, neither of which this extension's own alarm
+    // necessarily heard about yet. Ask the desktop for its current status --
+    // GET /status is itself what naturally finalizes a truly-expired session
+    // or advances a pomodoro phase server-side (see carmen-desktop's
+    // _get_status_locked) -- and only treat this as a real end if the
+    // desktop confirms it. See DESIGN_DECISIONS.txt, [2026-09-28].
+    const session = await getSession();
+    await reconcileAlarmWithSession(session);
+    if (session.isActive) {
+      // Still active from the desktop's point of view -- reconcile above
+      // already re-armed (new phase/resume) or cleared (paused) the alarm
+      // as appropriate. Nothing else to do; in particular, never POST
+      // /session/end or show the completion notification for a session
+      // that's still genuinely running.
+      return;
+    }
+
+    lastAcceptableUrl = "";
     try {
       await apiFetch("/session/end", { method: "POST" });
     } catch (err) {

@@ -227,3 +227,49 @@ out of sync (see that same entry) must itself be safe to run redundantly
 against tabs it already believes are handled -- otherwise it can't
 self-heal from exactly the kind of desync (a stale Set entry after a
 same-tab redirect) it exists to catch.
+
+[2026-09-28] chrome.alarms/browser.alarms never unilaterally ends a session --
+it only ever prompts a status recheck
+Decision: the ALARM_NAME alarm armed at session start (and re-armed on
+pause/resume) used to fire and unconditionally POST /session/end + finalize
+the UI the moment its endTime passed. That's wrong whenever the desktop's
+own state has moved on without this extension's alarm hearing about it --
+a pomodoro rolling to its next phase/break (advanced server-side inside
+carmen-desktop's _get_status_locked, with a brand new endTime), or a
+pause/resume that happened from the desktop side rather than through this
+extension's own pauseSession/resumeSession handlers. In both cases the
+armed alarm is just stale, not evidence the session ended.
+Now, the alarm firing (and, separately, this file's own regular
+getSession()-polling path in sweepTabsForCloak, which already runs every
+POLL_INTERVAL_MS regardless of lock mode) both feed into one
+reconcileAlarmWithSession() helper: it re-arms the alarm against whatever
+endTime the desktop is currently reporting, clears it while paused/inactive,
+and otherwise leaves it alone. onAlarm's own handler for ALARM_NAME calls
+getSession() first -- which is also literally the GET /status call that
+self-finalizes a truly-expired session or advances a pomodoro phase on the
+desktop side -- and only proceeds to POST /session/end + show the
+completion notification if that fresh status confirms the session is
+genuinely no longer active. A session still reported active after that
+check (new phase, or resumed) just gets its alarm re-armed and nothing else
+happens -- no POST, no notification.
+A browser-only (no desktop) session is explicitly exempted from all of
+this: its alarm is entirely self-managed by this file's own
+startSession/pauseSession/resumeSession/endSession handlers, with no
+external actor able to move its endTime out from under it.
+Why: same bug class as the corresponding fix already made in
+carmen-desktop (two places tracking the same "is this session still
+running" state, able to independently drift) -- here the alarm was a
+second, unsynced tracker of session-end alongside the desktop's own
+authoritative state.
+Rejected alternative: have the alarm handler blindly re-fetch and re-arm
+without ever ending anything itself, deferring all end-of-session
+detection entirely to the popup's polling. Not used -- the popup isn't
+guaranteed to be open, and this file already has its own
+always-running sweepTabsForCloak() polling loop capable of driving this
+independently of whether the popup is open.
+Left as-is: if the desktop is unreachable when the alarm fires,
+getSession() falls back to its existing defaultSession() (isActive: false)
+behavior, so this ends up taking the same "assume ended, try to POST
+/session/end anyway, let it fail silently" path this code already took
+on any desktop-unreachable error before this fix -- not a new failure
+mode, just preserved.
