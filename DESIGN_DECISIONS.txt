@@ -190,3 +190,40 @@ than trying to intercept every path that could revert it.
 Scope: soft lock is intentionally left alone -- it's meant to let the user
 stay on the page after a warning, so cloaking a tab they're allowed to
 keep using would be actively wrong, not just unnecessary.
+
+[2026-09-28] sweepTabsForCloak() re-cloaks unconditionally; cloakedTabIds is
+no longer a gate against re-cloaking
+Decision: cloakedTabIds is background.js's only record of "is this tab
+cloaked" -- the real cloak state lives inside content/cloak.js's own
+in-page closure, which is destroyed the instant that tab navigates,
+reloads, or gets redirected. sweepTabsForCloak() used to skip a tab
+entirely once cloakedTabIds already had it (`if (!cloakedTabIds.has(tab.id))
+{ cloakOffendingTab(tab.id); }`), on the assumption that a cloaked tab
+stays cloaked until something explicitly uncloaks it. That assumption
+breaks the moment a cloaked tab silently redirects to a DIFFERENT
+non-whitelisted page (meta-refresh, an SPA route change, an ad redirect
+chain): the new page has no cloak.js running yet and briefly shows its
+real title/favicon, but the sweep sees the stale cloakedTabIds entry from
+before the redirect and never re-applies the cloak.
+Now the per-tab loop cloaks every non-active, non-whitelisted http(s) tab
+unconditionally on every sweep, dropping the cloakedTabIds gate entirely
+from that loop. This relies on content/cloak.js's cloak() already being
+idempotent -- re-invoking it on an already-cloaked tab reasserts the same
+"CARMEN HIDDEN" title/lock favicon (a no-op in effect) and, critically,
+never re-captures "CARMEN HIDDEN" itself as the "original" title/favicon
+to restore on uncloak, since cloak() only saves originalTitle/
+originalFavicons the first time (`if (!cloaked) { originalTitle = ... }`).
+cloakedTabIds itself is kept for the bookkeeping that still needs it:
+uncloakTab()'s no-op guard, uncloakAllTabs() knowing which tabs to
+message, and the sweep's own uncloak-on-whitelist check just above this
+loop -- it's just no longer read as "don't bother cloaking this one
+again."
+Note: this supersedes part of the [2026-09-26] entry above, which
+described cloakedTabIds as preventing "re-inject[ing] + re-messag[ing] a
+tab that's already cloaked every single sweep" -- that's exactly the
+behavior this fix removes.
+Why: a periodic sweep whose entire job is catching cloak state drifting
+out of sync (see that same entry) must itself be safe to run redundantly
+against tabs it already believes are handled -- otherwise it can't
+self-heal from exactly the kind of desync (a stale Set entry after a
+same-tab redirect) it exists to catch.
