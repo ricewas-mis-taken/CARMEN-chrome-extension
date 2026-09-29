@@ -964,8 +964,18 @@ async function handleTabUrl(tabId, url) {
           // page in the background, unresolved, exactly like switching to
           // a regulated tab does. See HOMEPAGE_URL above for why the
           // homepage specifically is always safe to open.
+          //
+          // Deliberately omits `url` here -- Firefox has blocked extensions
+          // from opening "about:newtab" (HOMEPAGE_URL's value) via an
+          // explicit tabs.create({ url }) since Firefox 65 (Mozilla bug
+          // 1420405); passing it throws "Illegal URL", which the outer
+          // try/catch around this whole hard-lock block just logs, leaving
+          // the violating tab focused with zero enforcement applied. Calling
+          // tabs.create with no `url` at all opens Firefox's real default
+          // new-tab page with no error, and the resulting tab's own `.url`
+          // still reads back as "about:newtab" -- so HOMEPAGE_URL stays
+          // exactly as-is for comparisons like isExistingHomepageTab above.
           await browser.tabs.create({
-            url: HOMEPAGE_URL,
             active: true,
             windowId: currentTab.windowId,
           });
