@@ -237,7 +237,15 @@ categoryRetryBtn.addEventListener("click", () => {
   loadAndRender();
 });
 
-browser.runtime.sendMessage({ type: "getScreenTime" }, (response) => {
+// browser.runtime.sendMessage() is promise-only in Firefox -- there's no
+// callback argument like chrome's (passing one is interpreted as an options
+// object instead), so the callback below was simply never invoked and this
+// page's whole screen-time UI never rendered on first load. Every other
+// browser.runtime.sendMessage call in this tree already uses promise/
+// async-await style (see firefox/popup/popup.js and firefox/log/log.js) --
+// matches that established pattern.
+(async () => {
+  const response = await browser.runtime.sendMessage({ type: "getScreenTime" });
   currentByDay = response?.byDay || {};
   loadAndRender();
-});
+})();
