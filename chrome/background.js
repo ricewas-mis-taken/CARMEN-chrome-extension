@@ -1417,6 +1417,16 @@ setInterval(sweepTabsForCloak, POLL_INTERVAL_MS);
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
+      // message.payload is missing/malformed (e.g. sendMessage({type:
+      // "startSession"}) with no payload key at all) -- destructuring it
+      // directly used to throw before sendResponse was ever called, leaving
+      // the sender's callback hanging forever with no error. Same
+      // defensive pattern as pauseReview/resumeReview/getDeviceInfo below:
+      // respond with an explicit failure instead of crashing silently.
+      if (!message.payload || typeof message.payload !== "object") {
+        sendResponse({ ok: false, error: "payload is required" });
+        return;
+      }
       const {
         durationMinutes,
         lockMode,
