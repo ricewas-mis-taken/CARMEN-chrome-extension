@@ -816,10 +816,42 @@ async function reconcileAlarmWithSession(session) {
     return;
   }
 
-  if (session.endTime && session.endTime !== lastArmedAlarmEndTime) {
-    lastArmedAlarmEndTime = session.endTime;
-    browser.alarms.create(ALARM_NAME, { when: session.endTime });
+  if (!session.endTime) return;
+
+  // Compare rounded-to-the-second, not raw ms -- getSession() recomputes
+  // endTime fresh on every call as Date.now() + secondsRemaining*1000, so
+  // the raw value drifts by a few ms every single call purely from
+  // Date.now() advancing, even when the desktop is reporting the exact same
+  // secondsRemaining tick after tick. Comparing raw ms against
+  // lastArmedAlarmEndTime with !== was therefore true on every call, so a
+  // desktop that keeps reporting a deeply negative (or otherwise
+  // never-catching-up) secondsRemaining caused this to re-arm forever,
+  // every single reconciliation, always against a `when` already in the
+  // past. See DESIGN_DECISIONS.txt, [2026-09-29].
+  const roundedEndTime = Math.round(session.endTime / 1000);
+  if (roundedEndTime === Math.round(lastArmedAlarmEndTime / 1000)) return;
+
+  if (session.endTime <= Date.now()) {
+    // Genuinely in the past, not just "hasn't fired yet" -- arming an
+    // alarm for a moment that's already passed is exactly the doomed re-arm
+    // this fix exists to stop (browser.alarms fires an overdue `when`
+    // immediately, which would just re-enter this same stale-endTime state
+    // next tick). Clear any stale alarm instead of arming a new one, and
+    // leave the decision to sweepTabsForCloak's own regular
+    // getSession()-polling cadence (every POLL_INTERVAL_MS, unconditional
+    // of lock mode) -- it re-derives session.isActive fresh every tick
+    // regardless of whether an alarm is armed. This must NOT itself decide
+    // the session is over -- only getSession() confirming isActive: false
+    // is allowed to do that (see DESIGN_DECISIONS.txt, [2026-09-28]).
+    if (lastArmedAlarmEndTime !== 0) {
+      lastArmedAlarmEndTime = 0;
+      await browser.alarms.clear(ALARM_NAME);
+    }
+    return;
   }
+
+  lastArmedAlarmEndTime = session.endTime;
+  browser.alarms.create(ALARM_NAME, { when: session.endTime });
 }
 
 async function sweepTabsForCloak() {
