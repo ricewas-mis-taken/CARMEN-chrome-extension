@@ -1608,7 +1608,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "addWhitelistDomain") {
     (async () => {
       const { domain, reason } = message.payload || {};
-      if (!domain || !domain.trim() || !reason || !reason.trim()) {
+      // A truthy non-string domain/reason (e.g. the number 12345) used to
+      // pass the old `!domain` check and then throw on domain.trim() before
+      // sendResponse was ever called, leaving the sender's callback hanging.
+      // typeof-checking first means no payload shape can throw here.
+      if (
+        typeof domain !== "string" || !domain.trim() ||
+        typeof reason !== "string" || !reason.trim()
+      ) {
         sendResponse({ ok: false, error: "domain and reason are both required" });
         return;
       }
