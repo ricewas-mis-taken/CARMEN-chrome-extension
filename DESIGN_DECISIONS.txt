@@ -298,3 +298,43 @@ downstream of, per the cross-sync rule now in both repos' CLAUDE.md.
   resolve/repoint the wrong entry. See carmen-desktop/DESIGN_DECISIONS.txt
   for all of the above; no further extension-side change is needed beyond
   the fix already recorded here.
+
+[2026-09-29] reconcileAlarmWithSession's re-arm comparison must tolerate
+sub-second Date.now() drift, and must never arm an alarm already in the past
+Decision: this supersedes part of the [2026-09-28] entry above -- that entry
+covers why the alarm is never allowed to unilaterally end a session, and
+that part still stands unchanged. This entry covers a second, independent
+bug in the same function that entry introduced: reconcileAlarmWithSession()
+compared session.endTime against lastArmedAlarmEndTime with !==, but
+getSession() recomputes endTime fresh on every single call as
+Date.now() + secondsRemaining*1000. Even when the desktop reports the exact
+same secondsRemaining tick after tick, the raw endTime still drifts by a few
+ms every call purely from Date.now() advancing -- so the !== check was true
+on essentially every reconciliation, and a desktop that kept reporting a
+deeply negative (or otherwise stuck-in-the-past) secondsRemaining caused the
+alarm to be re-armed forever, always against a `when` already in the past.
+Now: (1) the comparison rounds both sides to the nearest second
+(Math.round(endTime / 1000)) before comparing, so ordinary ms-level drift no
+longer looks like a change worth re-arming for; (2) separately, if
+session.endTime is already <= Date.now() -- genuinely in the past, not just
+"hasn't fired yet" -- the alarm is cleared instead of armed. Arming a
+already-past `when` fires immediately (chrome.alarms/browser.alarms have no
+minimum-future-time enforcement), which just re-enters the same stale-endTime
+state on the very next tick.
+Why clearing (not ending the session) is safe: sweepTabsForCloak's own
+regular getSession()-polling loop (every POLL_INTERVAL_MS, unconditional of
+lock mode -- see that function's own comments) re-derives session.isActive
+fresh on every tick regardless of whether an alarm is armed, so clearing the
+alarm doesn't stop this from being re-checked; it only stops a doomed alarm
+from repeatedly firing in the meantime. Ending the session is still left
+entirely to getSession() confirming isActive: false, exactly as the
+[2026-09-28] entry requires -- this fix does not touch that path and does
+not let the alarm (or its absence) decide anything about session state on
+its own.
+Rejected alternative: skip re-arming whenever session.endTime <= Date.now()
+without clearing the existing alarm. Not used -- a previously-armed alarm
+from before the desktop started reporting a stuck-in-the-past endTime would
+otherwise sit there, already fired or about to, contributing nothing further
+and just leaving lastArmedAlarmEndTime pointing at a stale value that could
+mask a later, legitimate re-arm if the desktop's endTime happened to round
+to the same second again.
