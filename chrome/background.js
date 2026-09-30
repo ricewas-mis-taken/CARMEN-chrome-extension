@@ -306,7 +306,10 @@ function equivalentHostnames(domain) {
 
 function isWhitelisted(url, whitelist) {
   if (!url) return true;
-  if (!whitelist || whitelist.length === 0) return false;
+  // A non-empty STRING also has a truthy .length, so it used to pass this
+  // guard and reach whitelist.some (strings have no .some -- throws).
+  // Requiring Array.isArray closes that. See DESIGN_DECISIONS.txt, [2026-09-29].
+  if (!Array.isArray(whitelist) || whitelist.length === 0) return false;
 
   let parsed;
   try {
@@ -318,7 +321,10 @@ function isWhitelisted(url, whitelist) {
   const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
-    const trimmed = (entry || "").trim().toLowerCase();
+    // A truthy non-string entry (e.g. the number 42) used to sail through
+    // `entry || ""` unchanged and then throw on .trim(). Coercing to a
+    // string first means no entry shape can throw here.
+    const trimmed = String(entry ?? "").trim().toLowerCase();
     if (!trimmed) return false;
     const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
     const slashIndex = withoutProtocol.indexOf("/");
