@@ -273,3 +273,28 @@ behavior, so this ends up taking the same "assume ended, try to POST
 /session/end anyway, let it fail silently" path this code already took
 on any desktop-unreachable error before this fix -- not a new failure
 mode, just preserved.
+
+[2026-09-29] Cross-reference: carmen-desktop's review_store/violation fixes
+from this same bug-hunt pass
+Decision: recording the link to carmen-desktop's DESIGN_DECISIONS.txt for
+this pass's desktop-side fixes that this repo's own fixes above are directly
+downstream of, per the cross-sync rule now in both repos' CLAUDE.md.
+- carmen-desktop added locking around review_store._active_sessions (it's
+  hit concurrently from Flask worker threads and the Qt main thread) and,
+  separately, enforced "only one review timed at once" at the review_store
+  layer itself rather than relying solely on a private Qt UI flag -- same
+  bug class as this repo's own chrome.alarms/browser.alarms reconciliation
+  fix above (a second, unsynced tracker of state that's supposed to have
+  one source of truth).
+- carmen-desktop also made an independent review started mid-pomodoro-break
+  begin already-paused (auto_pause_for_break() wasn't level-triggered), and
+  unified two separate violation-cooldown trackers (window_tracker.py's
+  poll loop + enforcer.py's instant WinEvent hook) into one shared dedup
+  choke point. That second fix is the direct reason this repo's own
+  [2026-09-28] "violation reporting restricted to the active tab" entry
+  above was necessary at all -- carmen-desktop's
+  session_manager._open_violation_index only ever tracks one open
+  violation per kind, so a background tab reporting one would silently
+  resolve/repoint the wrong entry. See carmen-desktop/DESIGN_DECISIONS.txt
+  for all of the above; no further extension-side change is needed beyond
+  the fix already recorded here.
