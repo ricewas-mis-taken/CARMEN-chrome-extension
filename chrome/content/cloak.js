@@ -54,6 +54,28 @@
     originalFavicons = null;
   }
 
+  // Hover cards and vertical-tab previews are a screenshot of the page itself
+  // -- swapping the title/favicon never touches those. An opaque, topmost
+  // full-viewport cover on <html> (not <body>, which SPAs and pages replace
+  // wholesale) makes that screenshot a blank rectangle instead. The browser's
+  // own hover card still shows the domain; that part isn't page content.
+  const COVER_ID = "__carmen_cloak_cover";
+
+  function applyCover() {
+    if (document.getElementById(COVER_ID)) return;
+    const cover = document.createElement("div");
+    cover.id = COVER_ID;
+    cover.style.cssText =
+      "position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;" +
+      "background:#5B8DEF;pointer-events:auto;margin:0;padding:0;border:0;";
+    document.documentElement.appendChild(cover);
+  }
+
+  function removeCover() {
+    const cover = document.getElementById(COVER_ID);
+    if (cover) cover.remove();
+  }
+
   function cloak() {
     if (!cloaked) {
       originalTitle = document.title;
@@ -61,6 +83,7 @@
     }
     document.title = CLOAK_TITLE;
     applyCloakFavicon();
+    applyCover();
     // Re-asserted on an interval rather than fighting a MutationObserver
     // against every possible way a page can change its own title (direct
     // assignment, replacing the <title> node, rewriting <head> wholesale on
@@ -70,6 +93,7 @@
     if (reassertTimer) clearInterval(reassertTimer);
     reassertTimer = setInterval(() => {
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
+      applyCover();
     }, 500);
   }
 
@@ -82,6 +106,7 @@
     }
     if (originalTitle !== null) document.title = originalTitle;
     restoreFavicon();
+    removeCover();
   }
 
   chrome.runtime.onMessage.addListener((message) => {
