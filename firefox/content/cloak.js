@@ -20,14 +20,10 @@
   let originalTitle = null;
   let originalFavicons = null;
 
-  const LOCK_FAVICON =
-    "data:image/svg+xml," +
-    encodeURIComponent(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-        '<rect x="5" y="11" width="14" height="10" rx="2" fill="%235B8DEF"/>' +
-        '<path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="%235B8DEF" stroke-width="2"/>' +
-        "</svg>"
-    );
+  // The extension's own icon128.png, inlined as a data URI -- a web page's
+  // <link rel=icon> can't load a chrome-extension:// URL unless it's declared
+  // web_accessible, which would also expose the extension's id to every site.
+  const LOCK_FAVICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAIAAABMXPacAAAAyUlEQVR42u3RMQ0AAAgEsXeISnYkIgOGJqfgmprWYbEAAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAAcAEAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAAC8AFgAYu1BihkYNAsAAAAAElFTkSuQmCC";
 
   function applyCloakFavicon() {
     const existing = Array.from(document.querySelectorAll("link[rel~='icon']"));
