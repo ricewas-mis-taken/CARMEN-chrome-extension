@@ -338,3 +338,18 @@ otherwise sit there, already fired or about to, contributing nothing further
 and just leaving lastArmedAlarmEndTime pointing at a stale value that could
 mask a later, legitimate re-arm if the desktop's endTime happened to round
 to the same second again.
+
+[2026-10-03] Cloak sweep reloads discarded tabs; cloaked tabs get a blank cover
+Decision: sweepTabsForCloak() reloads a qualifying tab whose tab.discarded
+is true instead of trying to inject content/cloak.js into it, and cloak.js
+now covers the page with an opaque full-viewport div (on <html>) and uses
+the extension's own icon128.png (inlined as a data URI) as the favicon
+instead of the old lock glyph.
+Why: tabs inside a collapsed tab group are typically discarded, so
+chrome.scripting.executeScript failed silently and they kept their real
+title/favicon until clicked. The cover blanks the page screenshot that
+hover cards / vertical-tab previews show; the browser's own hover card
+still shows the domain, which an extension cannot hide.
+Rejected alternative: leaving discarded tabs alone until activated. Not
+used -- that is exactly the leak this fixes. Cost accepted: a discarded
+blocked-domain tab is loaded in the background once so it can be cloaked.
