@@ -17,6 +17,7 @@
   const CLOAK_TITLE = "CARMEN HIDDEN";
   let cloaked = false;
   let reassertTimer = null;
+  let titleObserver = null;
   let originalTitle = null;
   let originalFavicons = null;
 
@@ -94,7 +95,19 @@
     reassertTimer = setInterval(() => {
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
       applyCover();
-    }, 500);
+    }, 200);
+    // The interval alone leaves the real title visible for up to a tick
+    // whenever the page rewrites it; an observer snaps it back instantly. The
+    // interval stays as the backstop for paths the observer misses.
+    if (titleObserver) titleObserver.disconnect();
+    titleObserver = new MutationObserver(() => {
+      if (cloaked && document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
+    });
+    titleObserver.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
   }
 
   function uncloak() {
@@ -103,6 +116,10 @@
     if (reassertTimer) {
       clearInterval(reassertTimer);
       reassertTimer = null;
+    }
+    if (titleObserver) {
+      titleObserver.disconnect();
+      titleObserver = null;
     }
     if (originalTitle !== null) document.title = originalTitle;
     restoreFavicon();
