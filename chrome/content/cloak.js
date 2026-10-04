@@ -20,14 +20,10 @@
   let originalTitle = null;
   let originalFavicons = null;
 
-  const LOCK_FAVICON =
-    "data:image/svg+xml," +
-    encodeURIComponent(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-        '<rect x="5" y="11" width="14" height="10" rx="2" fill="%235B8DEF"/>' +
-        '<path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="%235B8DEF" stroke-width="2"/>' +
-        "</svg>"
-    );
+  // The extension's own icon128.png, inlined as a data URI -- a web page's
+  // <link rel=icon> can't load a chrome-extension:// URL unless it's declared
+  // web_accessible, which would also expose the extension's id to every site.
+  const LOCK_FAVICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAIAAABMXPacAAAAyUlEQVR42u3RMQ0AAAgEsXeISnYkIgOGJqfgmprWYbEAAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAAcAEAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAAC8AFgAYu1BihkYNAsAAAAAElFTkSuQmCC";
 
   function applyCloakFavicon() {
     const existing = Array.from(document.querySelectorAll("link[rel~='icon']"));
@@ -58,6 +54,28 @@
     originalFavicons = null;
   }
 
+  // Hover cards and vertical-tab previews are a screenshot of the page itself
+  // -- swapping the title/favicon never touches those. An opaque, topmost
+  // full-viewport cover on <html> (not <body>, which SPAs and pages replace
+  // wholesale) makes that screenshot a blank rectangle instead. The browser's
+  // own hover card still shows the domain; that part isn't page content.
+  const COVER_ID = "__carmen_cloak_cover";
+
+  function applyCover() {
+    if (document.getElementById(COVER_ID)) return;
+    const cover = document.createElement("div");
+    cover.id = COVER_ID;
+    cover.style.cssText =
+      "position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;" +
+      "background:#5B8DEF;pointer-events:auto;margin:0;padding:0;border:0;";
+    document.documentElement.appendChild(cover);
+  }
+
+  function removeCover() {
+    const cover = document.getElementById(COVER_ID);
+    if (cover) cover.remove();
+  }
+
   function cloak() {
     if (!cloaked) {
       originalTitle = document.title;
@@ -65,6 +83,7 @@
     }
     document.title = CLOAK_TITLE;
     applyCloakFavicon();
+    applyCover();
     // Re-asserted on an interval rather than fighting a MutationObserver
     // against every possible way a page can change its own title (direct
     // assignment, replacing the <title> node, rewriting <head> wholesale on
@@ -74,6 +93,7 @@
     if (reassertTimer) clearInterval(reassertTimer);
     reassertTimer = setInterval(() => {
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
+      applyCover();
     }, 500);
   }
 
@@ -86,6 +106,7 @@
     }
     if (originalTitle !== null) document.title = originalTitle;
     restoreFavicon();
+    removeCover();
   }
 
   chrome.runtime.onMessage.addListener((message) => {

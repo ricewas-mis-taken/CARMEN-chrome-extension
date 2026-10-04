@@ -916,6 +916,19 @@ async function sweepTabsForCloak() {
     if (tab.active) continue;
     if (!tab.url || !/^https?:\/\//i.test(tab.url)) continue;
     if (isWhitelisted(tab.url, session.domainWhitelist)) continue;
+    // A discarded/unloaded tab (typical for tabs inside a collapsed tab
+    // group) has no page for content/cloak.js to run in, so injection
+    // silently fails and it would keep its real title/favicon until the user
+    // clicked it. Reloading it brings the page back; the next sweep tick (or
+    // handleTabUrl's own sweep trigger on load) cloaks it.
+    if (tab.discarded) {
+      try {
+        await browser.tabs.reload(tab.id);
+      } catch (err) {
+        console.warn("CARMEN: could not reload a discarded tab to cloak it.", err);
+      }
+      continue;
+    }
     await cloakOffendingTab(tab.id);
   }
 }
