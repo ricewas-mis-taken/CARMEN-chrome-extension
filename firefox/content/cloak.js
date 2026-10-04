@@ -42,8 +42,9 @@
   }
 
   function restoreFavicon() {
-    if (!originalFavicons) return;
-    originalFavicons.forEach(({ el, href, injected }) => {
+    const originals = originalFavicons || [];
+    originalFavicons = null;
+    originals.forEach(({ el, href, injected }) => {
       if (injected) {
         el.remove();
       } else if (href !== null) {
@@ -52,7 +53,23 @@
         el.removeAttribute("href");
       }
     });
-    originalFavicons = null;
+    // The page may have replaced its <head> links while cloaked (SPA route
+    // changes do), leaving the originals detached -- restoring them above
+    // then does nothing and the cloak icon stays in the tab strip. Any icon
+    // link in the live document still carrying the cloak icon is ours.
+    document.querySelectorAll("link[rel~='icon']").forEach((el) => {
+      if (el.getAttribute("href") === LOCK_FAVICON) el.remove();
+    });
+    // A page with no <link rel=icon> relies on the browser's implicit
+    // /favicon.ico; removing our injected link doesn't make the browser
+    // re-request it, so the cloak icon would stick. Re-declaring it forces a
+    // refresh.
+    if (!document.querySelector("link[rel~='icon']")) {
+      const link = document.createElement("link");
+      link.rel = "icon";
+      link.href = location.origin + "/favicon.ico";
+      (document.head || document.documentElement).appendChild(link);
+    }
   }
 
   // Hover cards and vertical-tab previews are a screenshot of the page itself
