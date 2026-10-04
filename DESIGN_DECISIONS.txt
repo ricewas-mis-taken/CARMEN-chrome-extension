@@ -367,3 +367,14 @@ common in collapsed tab groups) blocked every tab after it -- so grouped
 tabs stayed uncloaked until clicked.
 Rejected alternative: just lowering POLL_INTERVAL_MS. Not used -- it polls
 the desktop faster for everything and still leaves the serial-stall bug.
+
+[2026-10-03] Uncloaking no longer depends on in-memory state
+Decision: cloakedTabIds is persisted to storage.local and re-hydrated on
+worker start; uncloakAllTabs() messages every open web tab (not just the
+tracked ids) once anything was cloaked; cloak.js's favicon restore removes
+any leftover cloak-icon link (page replaced its <head> links) and, for a
+page that had no <link rel=icon>, re-declares /favicon.ico.
+Why: favicons stayed on the cloak icon after a session ended -- the MV3
+worker restarting emptied the in-memory set so nothing got an uncloak
+message, and a page with no icon link never made the browser re-request its
+default favicon after our injected link was removed.
