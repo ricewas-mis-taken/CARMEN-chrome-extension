@@ -80,6 +80,20 @@ body {
   background: color-mix(in srgb, var(--review-color, #f0d38a) 12%, #fafbfc);
 }
 
+/* Under the pomodoro chip: same chip, just tighter -- a small task hanging
+   off the pomodoro rather than a second full-size timer. */
+.review-chip-compact {
+  margin-top: -6px;
+}
+
+.review-chip-compact .info-chip-row {
+  padding: 6px 12px;
+}
+
+.review-chip-compact .info-chip-time {
+  font-size: 14px;
+}
+
 .review-progress-icon {
   font-size: 15px;
   flex-shrink: 0;
