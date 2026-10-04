@@ -658,19 +658,40 @@ allowSuggestionDismissBtn.addEventListener("click", async () => {
   await chrome.storage.local.remove(PENDING_ALLOW_KEY);
 });
 
+// While a session is active the review chip sits directly under the
+// pomodoro chip (compact, same expandable look); with no session running it
+// has no pomodoro to hang off of and stays at the top of the popup.
+function placeReviewProgressBanner(underPomodoro) {
+  if (underPomodoro) {
+    if (reviewProgressBannerEl.previousElementSibling !== pomodoroInfoEl) {
+      pomodoroInfoEl.insertAdjacentElement("afterend", reviewProgressBannerEl);
+    }
+  } else if (reviewProgressBannerEl.parentElement.id !== "app") {
+    document.querySelector("#app > .header").insertAdjacentElement("afterend", reviewProgressBannerEl);
+  }
+  reviewProgressBannerEl.classList.toggle("review-chip-compact", underPomodoro);
+}
+
 function renderReviewProgressBanner(session) {
   const review = session?.reviewInProgress;
+  placeReviewProgressBanner(!!session?.isActive);
   reviewProgressBannerEl.classList.toggle("hidden", !review);
   if (!review) return;
 
-  reviewProgressTitleEl.textContent = review.problemName;
+  reviewProgressTitleEl.textContent = `Review: ${review.problemName}`;
   reviewProgressElapsedEl.textContent = formatElapsed((review.elapsedSeconds || 0) * 1000);
   reviewProgressSubjectEl.textContent = review.subjectName || "—";
   // Colors the chip after the problem's own category color (subjectColor,
   // e.g. "#4A90D9" -- same color already used for it elsewhere, like the
   // Review tab's own subject tags) via a CSS custom property, rather than
   // a fixed color -- see popup.css's .review-chip.
-  reviewProgressBannerEl.style.setProperty("--review-color", review.subjectColor || "#f0d38a");
+  // Prefers the color of the task the review's topic is linked to (taskColor,
+  // from carmen-desktop's /status) so the chip reads as belonging to that
+  // task; a topic with no linked task falls back to the subject color.
+  reviewProgressBannerEl.style.setProperty(
+    "--review-color",
+    review.taskColor || review.subjectColor || "#f0d38a"
+  );
 
   reviewProgressPausedLineEl.classList.toggle("hidden", !review.isPaused);
   if (review.isPaused) {
