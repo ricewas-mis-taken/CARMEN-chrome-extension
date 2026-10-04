@@ -393,3 +393,10 @@ Rejected alternative: coloring by subject color only (the previous
 behavior) -- the user wanted the chip to read as belonging to the task.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-04] (status
 reviewInProgress gains taskColor).
+
+[2026-10-04] Review chip also shows a "Start First Attempt" timing, view-only
+Decision: reviewInProgress with isFirstAttempt (carmen-desktop publishes it,
+see its DESIGN_DECISIONS.txt [2026-10-04]) renders in the same chip as
+"Review: First attempt"; its Pause button is hidden since the desktop banner
+owns that timer and the pause route has no entry to act on.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-04].
