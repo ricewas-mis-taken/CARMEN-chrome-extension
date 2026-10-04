@@ -686,6 +686,10 @@ function renderReviewProgressBanner(session) {
   if (review.isPaused) {
     reviewProgressPausedLineEl.textContent = review.autoPaused ? "Paused (on pomodoro break)" : "Paused";
   }
+  // A first attempt's timer is owned by the desktop banner alone (no
+  // review_store entry exists for the pause/resume routes to act on), so the
+  // extension can show it but not pause it.
+  reviewProgressPauseBtn.classList.toggle("hidden", !!review.isFirstAttempt);
   reviewProgressPauseBtn.textContent = review.isPaused ? "Resume" : "Pause";
 }
 
