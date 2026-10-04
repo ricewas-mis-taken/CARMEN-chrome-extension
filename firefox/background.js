@@ -768,6 +768,21 @@ async function recordPendingAllowSuggestion(url) {
 // re-message a tab that's already cloaked every single sweep.
 const cloakedTabIds = new Set();
 
+// Persisted so a cloak survives the MV3 service worker being killed and
+// re-woken: an in-memory-only set came back empty, so a session ending
+// afterward had nothing to uncloak and cloaked tabs kept the cloak
+// title/favicon forever.
+const CLOAKED_TABS_KEY = "cloakedTabIds";
+function persistCloakedTabs() {
+  browser.storage.local.set({ [CLOAKED_TABS_KEY]: Array.from(cloakedTabIds) }).catch(() => {});
+}
+const cloakedTabsHydrated = browser.storage.local
+  .get(CLOAKED_TABS_KEY)
+  .then((data) => {
+    for (const id of data[CLOAKED_TABS_KEY] || []) cloakedTabIds.add(id);
+  })
+  .catch(() => {});
+
 async function cloakOffendingTab(tabId) {
   // Hard lock never touches the offending tab's own URL (see switchAway()
   // below) -- only injecting content/cloak.js actually hides what it's
@@ -784,14 +799,17 @@ async function cloakOffendingTab(tabId) {
       await browser.tabs.sendMessage(tabId, { type: "cloakTab" });
     }
     cloakedTabIds.add(tabId);
+    persistCloakedTabs();
   } catch (err) {
     console.warn("CARMEN: could not cloak the offending tab.", err);
   }
 }
 
 async function uncloakTab(tabId) {
+  await cloakedTabsHydrated;
   if (!cloakedTabIds.has(tabId)) return;
   cloakedTabIds.delete(tabId);
+  persistCloakedTabs();
   try {
     await browser.tabs.sendMessage(tabId, { type: "uncloakTab" });
   } catch (err) {
@@ -801,9 +819,27 @@ async function uncloakTab(tabId) {
 }
 
 async function uncloakAllTabs() {
-  for (const tabId of Array.from(cloakedTabIds)) {
-    await uncloakTab(tabId);
+  await cloakedTabsHydrated;
+  if (!cloakedTabIds.size) return;
+  // Also messaged: every open web tab, not just the tracked ids -- a stale or
+  // lost id (tab discarded/reloaded mid-cloak, worker restarted) must never
+  // leave a tab stuck on the cloak title/favicon after the session is over.
+  // uncloak() in the content script is a no-op on a tab that isn't cloaked.
+  let tabs = [];
+  try {
+    tabs = await browser.tabs.query({});
+  } catch (err) {}
+  const ids = new Set(cloakedTabIds);
+  for (const t of tabs) {
+    if (t.url && /^https?:\/\//i.test(t.url)) ids.add(t.id);
   }
+  cloakedTabIds.clear();
+  persistCloakedTabs();
+  await Promise.all(
+    Array.from(ids).map((tabId) =>
+      withTimeout(browser.tabs.sendMessage(tabId, { type: "uncloakTab" }).catch(() => {}), CLOAK_TASK_TIMEOUT_MS)
+    )
+  );
 }
 
 // Keeps browser.alarms in sync with whatever endTime the desktop is
@@ -881,6 +917,7 @@ async function sweepTabsForCloakOnce() {
   // just while hard lock is enforced.
   await reconcileAlarmWithSession(session);
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
+    await cloakedTabsHydrated;
     if (cloakedTabIds.size) await uncloakAllTabs();
     return;
   }
@@ -1324,7 +1361,7 @@ browser.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
   tabLastActiveAt.delete(tabId);
-  cloakedTabIds.delete(tabId);
+  if (cloakedTabIds.delete(tabId)) persistCloakedTabs();
 
   browser.storage.local.get(SCREEN_TIME_CURRENT_KEY).then((data) => {
     if (data[SCREEN_TIME_CURRENT_KEY]?.tabId === tabId) {
