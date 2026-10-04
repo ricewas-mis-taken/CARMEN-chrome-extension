@@ -761,23 +761,48 @@ async function recordPendingAllowSuggestion(url) {
 // re-message a tab that's already cloaked every single sweep.
 const cloakedTabIds = new Set();
 
+// Persisted so a cloak survives the MV3 service worker being killed and
+// re-woken: an in-memory-only set came back empty, so a session ending
+// afterward had nothing to uncloak and cloaked tabs kept the cloak
+// title/favicon forever.
+const CLOAKED_TABS_KEY = "cloakedTabIds";
+function persistCloakedTabs() {
+  chrome.storage.local.set({ [CLOAKED_TABS_KEY]: Array.from(cloakedTabIds) }).catch(() => {});
+}
+const cloakedTabsHydrated = chrome.storage.local
+  .get(CLOAKED_TABS_KEY)
+  .then((data) => {
+    for (const id of data[CLOAKED_TABS_KEY] || []) cloakedTabIds.add(id);
+  })
+  .catch(() => {});
+
 async function cloakOffendingTab(tabId) {
   // Hard lock never touches the offending tab's own URL (see switchAway()
   // below) -- only injecting content/cloak.js actually hides what it's
   // sitting on from the tab strip itself (title + favicon), which a
   // same-tab overlay/blackout never reaches once focus has moved away.
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
-    await chrome.tabs.sendMessage(tabId, { type: "cloakTab" });
+    // Already-injected tabs (the common case on every re-sweep) answer
+    // immediately; only a fresh document (new tab, navigation, reload) has
+    // no listener yet and falls through to the inject-then-message path.
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "cloakTab" });
+    } catch (noListener) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
+      await chrome.tabs.sendMessage(tabId, { type: "cloakTab" });
+    }
     cloakedTabIds.add(tabId);
+    persistCloakedTabs();
   } catch (err) {
     console.warn("CARMEN: could not cloak the offending tab.", err);
   }
 }
 
 async function uncloakTab(tabId) {
+  await cloakedTabsHydrated;
   if (!cloakedTabIds.has(tabId)) return;
   cloakedTabIds.delete(tabId);
+  persistCloakedTabs();
   try {
     await chrome.tabs.sendMessage(tabId, { type: "uncloakTab" });
   } catch (err) {
@@ -787,9 +812,27 @@ async function uncloakTab(tabId) {
 }
 
 async function uncloakAllTabs() {
-  for (const tabId of Array.from(cloakedTabIds)) {
-    await uncloakTab(tabId);
+  await cloakedTabsHydrated;
+  if (!cloakedTabIds.size) return;
+  // Also messaged: every open web tab, not just the tracked ids -- a stale or
+  // lost id (tab discarded/reloaded mid-cloak, worker restarted) must never
+  // leave a tab stuck on the cloak title/favicon after the session is over.
+  // uncloak() in the content script is a no-op on a tab that isn't cloaked.
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch (err) {}
+  const ids = new Set(cloakedTabIds);
+  for (const t of tabs) {
+    if (t.url && /^https?:\/\//i.test(t.url)) ids.add(t.id);
   }
+  cloakedTabIds.clear();
+  persistCloakedTabs();
+  await Promise.all(
+    Array.from(ids).map((tabId) =>
+      withTimeout(chrome.tabs.sendMessage(tabId, { type: "uncloakTab" }).catch(() => {}), CLOAK_TASK_TIMEOUT_MS)
+    )
+  );
 }
 
 // Keeps chrome.alarms in sync with whatever endTime the desktop is
@@ -853,7 +896,7 @@ async function reconcileAlarmWithSession(session) {
   chrome.alarms.create(ALARM_NAME, { when: session.endTime });
 }
 
-async function sweepTabsForCloak() {
+async function sweepTabsForCloakOnce() {
   // The extension-side equivalent of carmen-desktop's own
   // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
   // only ever reacts to whichever tab is (or just became) active, so a tab
@@ -867,6 +910,7 @@ async function sweepTabsForCloak() {
   // just while hard lock is enforced.
   await reconcileAlarmWithSession(session);
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
+    await cloakedTabsHydrated;
     if (cloakedTabIds.size) await uncloakAllTabs();
     return;
   }
@@ -905,24 +949,63 @@ async function sweepTabsForCloak() {
   // cloakedTabIds is still used for the bookkeeping above (uncloak-on-
   // whitelist) and in uncloakAllTabs() -- just no longer as a gate that
   // *prevents* cloaking.
-  for (const tab of tabs) {
-    if (tab.active) continue;
-    if (!tab.url || !/^https?:\/\//i.test(tab.url)) continue;
-    if (isWhitelisted(tab.url, session.domainWhitelist)) continue;
-    // A discarded/unloaded tab (typical for tabs inside a collapsed tab
-    // group) has no page for content/cloak.js to run in, so injection
-    // silently fails and it would keep its real title/favicon until the user
-    // clicked it. Reloading it brings the page back; the next sweep tick (or
-    // handleTabUrl's own sweep trigger on load) cloaks it.
-    if (tab.discarded) {
-      try {
-        await chrome.tabs.reload(tab.id);
-      } catch (err) {
-        console.warn("CARMEN: could not reload a discarded tab to cloak it.", err);
-      }
-      continue;
+  // Every qualifying tab is handled in parallel, each with its own timeout.
+  // This used to be a serial `for ... await` loop, so one tab whose
+  // executeScript never settles (a frozen/unresponsive tab, typical inside a
+  // collapsed tab group) stalled every tab after it -- they stayed uncloaked
+  // until something else happened to touch them -- and with many tabs the
+  // serial round-trips alone made cloaking visibly slow.
+  const targets = tabs.filter(
+    (tab) =>
+      !tab.active &&
+      tab.url &&
+      /^https?:\/\//i.test(tab.url) &&
+      !isWhitelisted(tab.url, session.domainWhitelist)
+  );
+  await Promise.all(targets.map((tab) => withTimeout(cloakOrWakeTab(tab), CLOAK_TASK_TIMEOUT_MS)));
+}
+
+const CLOAK_TASK_TIMEOUT_MS = 4000;
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
+}
+
+// A discarded/unloaded tab (typical for tabs inside a collapsed tab group)
+// has no page for content/cloak.js to run in, so injection fails and it
+// would keep its real title/favicon until the user clicked it. Reloading it
+// brings the page back; the tab's own load events (see the tabs.onUpdated
+// listener) trigger a sweep that cloaks it the moment it's loaded.
+async function cloakOrWakeTab(tab) {
+  if (tab.discarded || tab.status === "unloaded") {
+    try {
+      await chrome.tabs.reload(tab.id);
+    } catch (err) {
+      console.warn("CARMEN: could not reload a discarded tab to cloak it.", err);
     }
-    await cloakOffendingTab(tab.id);
+    return;
+  }
+  await cloakOffendingTab(tab.id);
+}
+
+// Coalesces overlapping sweeps (tab events can fire in bursts) into at most
+// one running plus one queued, so cloaking can be triggered on every tab
+// event without piling up redundant work.
+let cloakSweepRunning = false;
+let cloakSweepQueued = false;
+async function sweepTabsForCloak() {
+  if (cloakSweepRunning) {
+    cloakSweepQueued = true;
+    return;
+  }
+  cloakSweepRunning = true;
+  try {
+    do {
+      cloakSweepQueued = false;
+      await sweepTabsForCloakOnce();
+    } while (cloakSweepQueued);
+  } finally {
+    cloakSweepRunning = false;
   }
 }
 
@@ -1205,6 +1288,9 @@ async function recheckAllActiveTabs() {
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  // The tab just switched away from is now a background tab -- cloak it
+  // right away instead of waiting for the next periodic tick.
+  sweepTabsForCloak();
   try {
     const previousTabId = activeTabByWindow.get(windowId);
     if (previousTabId !== undefined && previousTabId !== tabId) {
@@ -1238,6 +1324,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status) sweepTabsForCloak();
   // Only the active tab's own navigation should retarget what's being
   // timed -- onUpdated fires for background tabs too, which must not be
   // mistaken for "the user is now looking at this domain".
@@ -1256,7 +1343,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
   tabLastActiveAt.delete(tabId);
-  cloakedTabIds.delete(tabId);
+  if (cloakedTabIds.delete(tabId)) persistCloakedTabs();
 
   chrome.storage.local.get(SCREEN_TIME_CURRENT_KEY).then((data) => {
     if (data[SCREEN_TIME_CURRENT_KEY]?.tabId === tabId) {
@@ -1426,6 +1513,15 @@ setInterval(updateSyncBadge, POLL_INTERVAL_MS);
 // what actually notices "the break/session just ended" in time to
 // uncloakAllTabs() -- see sweepTabsForCloak()'s own early-return branch.
 setInterval(sweepTabsForCloak, POLL_INTERVAL_MS);
+
+// Event-driven triggers so cloaking lands immediately instead of waiting up
+// to POLL_INTERVAL_MS for the periodic tick above.
+chrome.tabs.onCreated.addListener(() => sweepTabsForCloak());
+chrome.windows.onFocusChanged.addListener(() => sweepTabsForCloak());
+if (chrome.tabGroups) {
+  chrome.tabGroups.onUpdated.addListener(() => sweepTabsForCloak());
+  chrome.tabGroups.onCreated.addListener(() => sweepTabsForCloak());
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
