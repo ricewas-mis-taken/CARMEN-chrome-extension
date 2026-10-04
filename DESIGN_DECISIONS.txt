@@ -378,3 +378,18 @@ Why: favicons stayed on the cloak icon after a session ended -- the MV3
 worker restarting emptied the in-memory set so nothing got an uncloak
 message, and a page with no icon link never made the browser re-request its
 default favicon after our injected link was removed.
+
+[2026-10-04] Review chip hangs under the pomodoro chip, colored by its task
+Decision: while a session is active, the review-in-progress chip (from
+/status reviewInProgress) is rendered directly under the pomodoro chip as a
+compact, same-style expandable chip labeled "Review: <problem>" with time
+elapsed; with no session active it stays at the top of the popup. Its color
+is the linked task's color (reviewInProgress.taskColor), falling back to the
+problem's subject color when the topic has no linked task.
+Why: with a pomodoro running, the review read as a separate full-size banner
+far from the timer it runs alongside; a small task under the pomodoro shows
+the relationship.
+Rejected alternative: coloring by subject color only (the previous
+behavior) -- the user wanted the chip to read as belonging to the task.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-04] (status
+reviewInProgress gains taskColor).
