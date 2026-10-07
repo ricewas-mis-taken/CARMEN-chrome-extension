@@ -944,6 +944,10 @@ async function reconcileAlarmWithSession(session) {
   browser.alarms.create(ALARM_NAME, { when: session.endTime });
 }
 
+// Whether the previous sweep saw an enforced (active, not paused, not on
+// break) session -- see the transition check in sweepTabsForCloakOnce().
+let wasEnforcing = false;
+
 async function sweepTabsForCloakOnce() {
   // The extension-side equivalent of carmen-desktop's own
   // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
@@ -957,6 +961,18 @@ async function sweepTabsForCloakOnce() {
   // below), and reconciling the alarm needs to happen on every tick, not
   // just while hard lock is enforced.
   await reconcileAlarmWithSession(session);
+
+  // handleTabUrl marks a tab's URL as handled even while nothing is enforced
+  // (no session / paused / break), and nothing else re-evaluates the active
+  // tab when a session starts or a break ends on the desktop side -- so the
+  // tab the user is already sitting on stayed exempt until they switched or
+  // navigated. This sweep already polls status regularly, so notice the
+  // not-enforcing -> enforcing transition here and re-check the active tabs.
+  const enforcing = session.isActive && !session.isPaused && !session.isBreak;
+  const justStartedEnforcing = enforcing && !wasEnforcing;
+  wasEnforcing = enforcing;
+  if (justStartedEnforcing) await recheckAllActiveTabs();
+
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
     await cloakedTabsHydrated;
     if (cloakedTabIds.size) await uncloakAllTabs();
