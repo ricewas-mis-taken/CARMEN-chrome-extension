@@ -152,6 +152,13 @@ export async function pushRules({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  // The version the edit was made against (e.g. what the popup's textarea was
+  // loaded from). Defaults to this profile's current cache, which is only
+  // right if nothing refreshed it since the user started editing -- a
+  // background poll that picked up another device's change in the meantime
+  // would otherwise make the server see a "plain edit" and replace, dropping
+  // that change instead of merging.
+  baseVersion,
   timeoutMs,
 }) {
   const cached = await getCachedRules(storageApi);
@@ -162,7 +169,7 @@ export async function pushRules({
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
-      body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
+      body: JSON.stringify({ domainWhitelist, baseVersion: baseVersion ?? cached.version }),
     },
     timeoutMs
   );
@@ -195,10 +202,11 @@ export async function saveWhitelist({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  baseVersion,
   timeoutMs,
 }) {
   try {
-    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist, timeoutMs });
+    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist, baseVersion, timeoutMs });
     return { ...rules, synced: true };
   } catch (err) {
     console.warn(

@@ -101,7 +101,23 @@ const parseLines = (value) =>
 // storage.local -- background.js's polling keeps it up to date with
 // whatever the desktop app has, which may have been edited from a
 // different Chrome profile, Edge, or Firefox since this popup last opened.
-const whitelistLoaded = getCachedRules(browser.storage.local).then(({ domainWhitelist }) => {
+// The cache version the textarea below was loaded from -- saves are pushed
+// against THIS version (not whatever the cache has moved to by the time the
+// user clicks), so the desktop merges a change another device made while the
+// popup was open instead of overwriting it.
+let whitelistBaseVersion;
+async function saveEditedWhitelist(domainWhitelist) {
+  const result = await saveWhitelist({
+    storageApi: browser.storage.local,
+    domainWhitelist,
+    baseVersion: whitelistBaseVersion,
+  });
+  if (result.synced) whitelistBaseVersion = result.version;
+  return result;
+}
+
+const whitelistLoaded = getCachedRules(browser.storage.local).then(({ domainWhitelist, version }) => {
+  whitelistBaseVersion = version;
   if (Array.isArray(domainWhitelist) && domainWhitelist.length > 0) {
     whitelistTextarea.value = domainWhitelist.join("\n");
   }
@@ -131,7 +147,7 @@ async function refreshReviewAdditionsButton() {
 
 reviewAdditionsBtn.addEventListener("click", async () => {
   await whitelistLoaded;
-  await saveWhitelist({ storageApi: browser.storage.local, domainWhitelist: parseLines(whitelistTextarea.value) });
+  await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   browser.tabs.create({ url: browser.runtime.getURL("additions/additions.html") });
 });
 
@@ -146,10 +162,7 @@ saveWhitelistBtn.addEventListener("click", async () => {
   await whitelistLoaded;
   saveWhitelistBtn.disabled = true;
   saveWhitelistStatusEl.textContent = "Saving…";
-  const result = await saveWhitelist({
-    storageApi: browser.storage.local,
-    domainWhitelist: parseLines(whitelistTextarea.value),
-  });
+  const result = await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   if (!result.synced) {
     saveWhitelistStatusEl.textContent = "Saved to this device — will sync once the desktop app is reachable.";
   } else if (result.merged) {
@@ -295,7 +308,7 @@ startBtn.addEventListener("click", async () => {
   // Disable BEFORE awaiting the (network) whitelist push -- a second click
   // during that await used to re-enter this handler and start a second session.
   startBtn.disabled = true;
-  await saveWhitelist({ storageApi: browser.storage.local, domainWhitelist });
+  await saveEditedWhitelist(domainWhitelist);
 
   const browserOnly = awaitingBrowserOnlyConfirm;
 
