@@ -1930,7 +1930,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.accepted) {
       applyPendingDomainSave();
     } else {
-      browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+      // An explicit "No" on the overlay dismisses both prompt surfaces,
+      // same as the notification's own "No" button does.
+      (async () => {
+        const { [SAVE_DOMAINS_PROMPT_KEY]: pending } = await browser.storage.local.get(SAVE_DOMAINS_PROMPT_KEY);
+        if (pending) browser.notifications.clear(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${pending.taskId}`);
+        await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+      })();
     }
     return false;
   }
