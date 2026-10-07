@@ -25,7 +25,13 @@ async function fetchRules(fetchImpl, apiBase) {
   if (!res.ok) {
     throw new Error(`GET ${FOCUS_RULES_PATH} responded with ${res.status}`);
   }
-  return res.json();
+  const body = await res.json();
+  // A 200 that is not a ruleset (wrong service on the port, an error body)
+  // must be treated like an unreachable desktop, never as "the list is empty".
+  if (!body || typeof body !== "object" || !Array.isArray(body.domainWhitelist) || typeof body.version !== "number") {
+    throw new Error(`GET ${FOCUS_RULES_PATH} returned a malformed rules document`);
+  }
+  return body;
 }
 
 // One poll attempt: fetch, compare version against the cache, and only
