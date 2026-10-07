@@ -1089,7 +1089,22 @@ async function handleTabUrl(tabId, url) {
     uncloakTab(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     if (session.source === "browser-only") return;
-    if (!hadOpenViolation) return;
+    let shouldResolve = hadOpenViolation;
+    if (!shouldResolve && openViolationTabs.size > 0) {
+      // The user came back on task by switching to a DIFFERENT, whitelisted
+      // tab while an off-task tab stays open -- the desktop's single open
+      // domain violation must still be resolved, otherwise it stays open
+      // (and keeps accruing off-task time) until that other tab is closed.
+      // The off-task tab re-reports a fresh violation if it's revisited.
+      try {
+        const activeNow = await chrome.tabs.get(tabId);
+        if (activeNow.active) {
+          openViolationTabs.clear();
+          shouldResolve = true;
+        }
+      } catch (err) {}
+    }
+    if (!shouldResolve) return;
     try {
       await apiFetch("/violation/resolved", {
         method: "POST",
