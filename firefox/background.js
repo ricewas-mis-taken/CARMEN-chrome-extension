@@ -347,7 +347,8 @@ function isWhitelisted(url, whitelist) {
   } catch (err) {
     return false;
   }
-  const hostname = parsed.hostname.toLowerCase();
+  // A fully-qualified "example.org." is the same host as "example.org".
+  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
   const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
