@@ -308,6 +308,8 @@ function refreshStatus() {
   chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
     const session = response?.session;
     if (session?.isActive) {
+      // Armed here, not at load: the first reply can be "no session", which stops the poll for good.
+      if (!statusPollInterval) statusPollInterval = setInterval(refreshStatus, 3000);
       renderActiveSession(session);
     } else {
       stopStatusPoll();
@@ -318,4 +320,3 @@ function refreshStatus() {
 }
 
 refreshStatus();
-statusPollInterval = setInterval(refreshStatus, 3000);
