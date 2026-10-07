@@ -259,6 +259,7 @@ async function handleTabUrl(tabId, url) {
 
   if (whitelisted) {
     switchAwayAttemptsByTab.delete(tabId);
+    overlayDomainByTab.delete(tabId);
     const openTimestamp = openViolationTimestampByTab.get(tabId);
     if (openTimestamp !== undefined) {
       openViolationTimestampByTab.delete(tabId);
