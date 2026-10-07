@@ -777,6 +777,9 @@ const MULTI_PART_PUBLIC_SUFFIXES = new Set([
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
+    // IP literals have no registrable domain -- slicing the last two labels
+    // would turn 192.168.1.50 into "1.50", which then matches other networks.
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) return hostname;
     const labels = hostname.split(".");
     if (labels.length <= 2) return hostname;
     const apex = labels.slice(-2).join(".");
