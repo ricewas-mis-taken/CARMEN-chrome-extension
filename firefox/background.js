@@ -846,7 +846,12 @@ function getBaseDomain(url) {
     if (MULTI_PART_PUBLIC_SUFFIXES.has(apex)) {
       return labels.slice(-3).join(".");
     }
-    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || MULTI_TENANT_HOST_SUFFIXES.has(apex)) {
+    // Tenant suffixes can have more than two labels ("s3.amazonaws.com"), so test the host's own tail,
+    // not just the two-label apex.
+    const isTenantHost = Array.from(MULTI_TENANT_HOST_SUFFIXES).some(
+      (suffix) => hostname === suffix || hostname.endsWith("." + suffix)
+    );
+    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || isTenantHost) {
       return hostname;
     }
     return apex;
