@@ -741,6 +741,13 @@ const MULTI_TENANT_HOST_SUFFIXES = new Set([
   "tumblr.com",
 ]);
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "com.au", "net.au", "org.au", "edu.au", "gov.au",
+  "co.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "ac.jp", "co.in", "net.in", "org.in", "ac.in",
+  "com.br", "net.br", "org.br", "com.cn", "net.cn", "org.cn", "co.za", "org.za", "com.mx", "com.ar",
+  "com.tr", "co.kr", "or.kr", "com.sg", "com.hk", "com.tw", "co.il", "co.id",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
@@ -757,6 +764,12 @@ function getBaseDomain(url) {
     const labels = hostname.split(".");
     if (labels.length <= 2) return hostname;
     const apex = labels.slice(-2).join(".");
+    // Two-part public suffixes (co.uk, com.au, ...): the "base domain" is the
+    // label in front of them, not the suffix itself -- whitelisting the bare
+    // suffix would allow every site under it.
+    if (MULTI_PART_PUBLIC_SUFFIXES.has(apex)) {
+      return labels.slice(-3).join(".");
+    }
     if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || MULTI_TENANT_HOST_SUFFIXES.has(apex)) {
       return hostname;
     }
