@@ -437,7 +437,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
+  // Closing a still-violating tab resolves its open violation, the same as
+  // navigating back to a whitelisted URL does.
+  const openTimestamp = openViolationTimestampByTab.get(tabId);
   openViolationTimestampByTab.delete(tabId);
+  if (openTimestamp !== undefined) resolveViolation(openTimestamp);
   switchAwayAttemptsByTab.delete(tabId);
 });
 
