@@ -44,11 +44,14 @@ const GROUP_THRESHOLD_SECONDS = 5 * 60;
 
 function categorizeDomain(domain) {
   const key = (domain || "").toLowerCase().replace(/^www\./, "");
-  if (DOMAIN_CATEGORIES[key]) return DOMAIN_CATEGORIES[key];
+  // Own-property lookups only: a hostname like "constructor" or "__proto__"
+  // would otherwise resolve to an inherited Object.prototype member.
+  const own = (k) => Object.prototype.hasOwnProperty.call(DOMAIN_CATEGORIES, k) && DOMAIN_CATEGORIES[k];
+  if (own(key)) return DOMAIN_CATEGORIES[key];
   const parts = key.split(".");
   if (parts.length > 2) {
     const parent = parts.slice(-2).join(".");
-    if (DOMAIN_CATEGORIES[parent]) return DOMAIN_CATEGORIES[parent];
+    if (own(parent)) return DOMAIN_CATEGORIES[parent];
   }
   return "Other";
 }
@@ -81,7 +84,7 @@ function weekDayKeys(date) {
 }
 
 function aggregate(byDay, keys) {
-  const totals = {};
+  const totals = Object.create(null);
   for (const key of keys) {
     const bucket = byDay[key];
     if (!bucket) continue;
