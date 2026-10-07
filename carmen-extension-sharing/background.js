@@ -504,6 +504,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       lastHandledUrlByTab.clear();
       openViolationTimestampByTab.clear();
+      overlayDomainByTab.clear();
+      switchAwayAttemptsByTab.clear();
       await resetSessionAdditions();
       await chrome.alarms.clear(ALARM_NAME);
       chrome.alarms.create(ALARM_NAME, { when: endTime });
