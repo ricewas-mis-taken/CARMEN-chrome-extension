@@ -18,7 +18,7 @@ export async function load({ dir = "chrome", fetchImpl, beforeImport } = {}) {
   globalThis.setInterval = (f, ms) => { intervals.push(f); const id = realSetInterval(f, 1e9); id.unref?.(); return id; };
   globalThis.chrome = {
     storage: { local: {
-      get: async (k) => { if (typeof k === "string") return k in store ? { [k]: structuredClone(store[k]) } : {}; return {}; },
+      get: async (k) => { const keys = typeof k === "string" ? [k] : Array.isArray(k) ? k : []; const out = {}; for (const key of keys) if (key in store) out[key] = structuredClone(store[key]); return out; },
       set: async (o) => { for (const [k, v] of Object.entries(o)) store[k] = structuredClone(v); },
       remove: async (k) => { delete store[k]; },
     } },
