@@ -54,6 +54,16 @@ export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BA
     if (remote.version === cached.version && remote.updatedAt === cached.updatedAt) {
       return { changed: false, rules: cached };
     }
+    // A response that was already in flight when a newer save landed is
+    // older than the cache -- writing it would roll the edit back. A genuine
+    // server reset also lowers the version, but then updatedAt is newer.
+    if (
+      typeof remote.version === "number" &&
+      remote.version < cached.version &&
+      !(Date.parse(remote.updatedAt) > Date.parse(cached.updatedAt))
+    ) {
+      return { changed: false, rules: cached };
+    }
 
     const rules = {
       domainWhitelist: Array.isArray(remote.domainWhitelist) ? remote.domainWhitelist : [],
