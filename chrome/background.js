@@ -378,6 +378,8 @@ function isWhitelisted(url, whitelist) {
     const withoutProtocol = trimmed
       .replace(/^https?:\/\//, "")
       .replace(/^\*?\./, "")
+      // Query/fragment never take part in matching (the URL's pathname has neither).
+      .replace(/[?#].*$/, "")
       .replace(/^([^/?#]*?):\d+(?=[/?#]|$)/, "$1");
     const slashIndex = withoutProtocol.indexOf("/");
     if (slashIndex === -1) {
@@ -398,7 +400,11 @@ function isWhitelisted(url, whitelist) {
     // same way the no-slash branch does closes that; the boundary check on
     // the path prevents "/document" from also matching "/documentXYZ".
     const entryDomain = canonicalEntryHost(withoutProtocol.slice(0, slashIndex));
-    const entryPath = withoutProtocol.slice(slashIndex);
+    // Percent-encode the way URL.pathname is, so "my notes" / "café" match.
+    let entryPath = withoutProtocol.slice(slashIndex);
+    try {
+      entryPath = new URL("http://x" + entryPath).pathname.toLowerCase();
+    } catch (err) {}
     const hostnameMatches = equivalentHostnames(entryDomain).some(
       (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
     );
