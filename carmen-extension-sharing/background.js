@@ -519,6 +519,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
+      // A missing/malformed payload used to throw here before sendResponse
+      // was ever called, leaving the sender's callback hanging forever.
+      if (!message.payload || typeof message.payload !== "object") {
+        sendResponse({ ok: false, error: "payload is required" });
+        return;
+      }
       const { durationMinutes, lockMode, domainWhitelist } = message.payload;
       const endTime = Date.now() + durationMinutes * 60 * 1000;
 
@@ -598,7 +604,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "addWhitelistDomain") {
     (async () => {
       const { domain, reason } = message.payload || {};
-      if (!domain || !domain.trim() || !reason || !reason.trim()) {
+      if (
+        typeof domain !== "string" || !domain.trim() ||
+        typeof reason !== "string" || !reason.trim()
+      ) {
         sendResponse({ ok: false, error: "domain and reason are both required" });
         return;
       }
