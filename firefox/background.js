@@ -497,14 +497,34 @@ async function maybeOfferToSaveDomains(entry) {
     [SAVE_DOMAINS_PROMPT_KEY]: { taskId, taskTitle, domains },
   });
 
-  browser.notifications.create(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${taskId}`, {
+  // Firefox's notifications API has no `buttons` or `requireInteraction`
+  // (create() rejects/throws on unsupported properties), so try the full
+  // Chrome-style notification first and fall back to a plain informational
+  // one -- either way the overlay below must still get shown, since on
+  // Firefox it is the only surface that can answer Yes/No.
+  const notificationId = `${SAVE_DOMAINS_NOTIFICATION_PREFIX}${taskId}`;
+  const notificationBase = {
     type: "basic",
     iconUrl: browser.runtime.getURL("icon128.png"),
     title: `Save ${domains.length} site${domains.length === 1 ? "" : "s"} to "${taskTitle}"?`,
     message: domains.join(", "),
-    buttons: [{ title: "Yes, save" }, { title: "No" }],
-    requireInteraction: true,
-  });
+  };
+  try {
+    await browser.notifications.create(notificationId, {
+      ...notificationBase,
+      buttons: [{ title: "Yes, save" }, { title: "No" }],
+      requireInteraction: true,
+    });
+  } catch (err) {
+    try {
+      await browser.notifications.create(notificationId, {
+        ...notificationBase,
+        message: `${notificationBase.message} -- answer in the prompt on the page.`,
+      });
+    } catch (err2) {
+      console.warn("CARMEN: could not show the save-domains notification.", err2);
+    }
+  }
 
   try {
     const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
@@ -538,7 +558,9 @@ async function applyPendingDomainSave() {
   }
 }
 
-browser.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+// notifications.onButtonClicked does not exist in Firefox -- registering on
+// it unguarded threw at module load and killed the entire background script.
+browser.notifications.onButtonClicked?.addListener((notificationId, buttonIndex) => {
   if (!notificationId.startsWith(SAVE_DOMAINS_NOTIFICATION_PREFIX)) return;
   browser.notifications.clear(notificationId);
   if (buttonIndex === 0) {
