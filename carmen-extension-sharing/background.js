@@ -493,6 +493,11 @@ async function endActiveSession() {
   return withStorageLock(async () => {
     const session = await getSession();
     if (!session.isActive) return session;
+    // Close violations still open at the end so history shows a duration.
+    const nowMs = Date.now();
+    session.violationLog = (session.violationLog || []).map((e) =>
+      e.resolvedAt ? e : { ...e, resolvedAt: nowMs, durationSeconds: (nowMs - e.timestamp) / 1000 }
+    );
     await appendHistoryEntry(session);
     await setSession(defaultSession());
     return session;
