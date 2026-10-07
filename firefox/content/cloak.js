@@ -26,12 +26,21 @@
   // web_accessible, which would also expose the extension's id to every site.
   const LOCK_FAVICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAIAAABMXPacAAAAyUlEQVR42u3RMQ0AAAgEsXeISnYkIgOGJqfgmprWYbEAAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAIAAABACAAAAQAgAAAEAAAAgBAAAAAcAEAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAAC8AFgAYu1BihkYNAsAAAAAElFTkSuQmCC";
 
+  // Also called from the re-assert interval: a page can change an icon's href
+  // or add a new icon link while cloaked (unread counters, SPA route changes),
+  // which would otherwise show its real favicon again. Links seen for the
+  // first time are recorded so uncloak can restore them.
   function applyCloakFavicon() {
     const existing = Array.from(document.querySelectorAll("link[rel~='icon']"));
-    if (!originalFavicons) {
-      originalFavicons = existing.map((el) => ({ el, href: el.getAttribute("href"), injected: false }));
-    }
-    existing.forEach((el) => el.setAttribute("href", LOCK_FAVICON));
+    if (!originalFavicons) originalFavicons = [];
+    existing.forEach((el) => {
+      const href = el.getAttribute("href");
+      if (href === LOCK_FAVICON) return;
+      if (!originalFavicons.some((o) => o.el === el)) {
+        originalFavicons.push({ el, href, injected: false });
+      }
+      el.setAttribute("href", LOCK_FAVICON);
+    });
     if (existing.length === 0) {
       const link = document.createElement("link");
       link.rel = "icon";
@@ -111,6 +120,7 @@
     if (reassertTimer) clearInterval(reassertTimer);
     reassertTimer = setInterval(() => {
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
+      applyCloakFavicon();
       applyCover();
     }, 200);
     // The interval alone leaves the real title visible for up to a tick
