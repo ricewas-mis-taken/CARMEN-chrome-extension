@@ -70,6 +70,7 @@ async function apiFetch(path, options) {
 }
 
 const LOCAL_SESSION_KEY = "browserOnlySession";
+const LOCAL_EXPIRY_GRACE_MS = 5000;
 
 function defaultLocalSession() {
   return {
@@ -175,7 +176,17 @@ async function getSession() {
   // violation reporting) and status display for the local session that
   // was still legitimately running, with chrome.alarms the only thing
   // still ticking toward its eventual end.
-  const local = await getLocalSession();
+  let local = await getLocalSession();
+  // A browser-only session whose endTime has long passed is over, even if its
+  // alarm never fired (alarms don't reliably survive a browser restart).
+  // The grace window keeps this from racing the alarm handler, which is the
+  // normal path that ends it and shows the completion notification.
+  if (local.isActive && !local.isPaused && local.endTime && local.endTime + LOCAL_EXPIRY_GRACE_MS <= Date.now()) {
+    await setLocalSession(defaultLocalSession());
+    lastAcceptableUrl = "";
+    notifyLocalSessionComplete(local);
+    local = defaultLocalSession();
+  }
   if (local.isActive) {
     const startedAt = local.startedAt || null;
     const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
