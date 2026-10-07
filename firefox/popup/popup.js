@@ -478,6 +478,8 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+let lastZeroRefreshAt = 0;
+
 function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
   stopCountdown();
   const tick = () => {
@@ -515,7 +517,17 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
         // check decide -- showSetupView() only if the session is genuinely
         // over, otherwise refreshStatus() re-renders the new phase/endTime.
         stopCountdown();
-        refreshStatus();
+        // Throttled: if the desktop keeps reporting this session as active
+        // with no time left (it is still finalizing, or its secondsRemaining
+        // is stale), an unconditional immediate refresh re-renders, restarts
+        // this countdown, hits zero again and refreshes again -- a tight loop
+        // of getStatus round trips (each one a request to the desktop). The 3s
+        // status poll is still running and picks up the real state.
+        const now = Date.now();
+        if (now - lastZeroRefreshAt >= 2000) {
+          lastZeroRefreshAt = now;
+          refreshStatus();
+        }
       }
     }
   };
