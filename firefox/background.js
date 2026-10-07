@@ -379,8 +379,12 @@ function isWhitelisted(url, whitelist) {
     if (!trimmed) return false;
     // A port in the entry ("localhost:3000") can never equal URL.hostname,
     // which never carries one -- drop it from the host part.
+    // "*.example.com" and ".example.com" are the usual ways people write "this
+    // domain and its subdomains" -- an entry matches subdomains anyway, so just
+    // drop the wildcard/leading dot instead of letting it silently never match.
     const withoutProtocol = trimmed
       .replace(/^https?:\/\//, "")
+      .replace(/^\*?\./, "")
       .replace(/^([^/?#]*?):\d+(?=[/?#]|$)/, "$1");
     const slashIndex = withoutProtocol.indexOf("/");
     if (slashIndex === -1) {
