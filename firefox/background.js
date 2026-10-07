@@ -201,7 +201,9 @@ async function getSession() {
       isActive: true,
       isPaused: local.isPaused,
       isBurnout: false,
-      endTime: local.endTime,
+      // A paused session's stored endTime is stale (it's only re-based on
+      // resume) -- report the frozen remaining time instead.
+      endTime: local.isPaused ? Date.now() + (local.pausedRemainingMs || 0) : local.endTime,
       startedAt,
       activeElapsedMs,
       lockMode: local.lockMode,
