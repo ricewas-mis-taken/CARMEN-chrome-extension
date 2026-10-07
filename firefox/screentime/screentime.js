@@ -22,7 +22,7 @@ let DOMAIN_CATEGORIES = {};
 
 async function loadDomainCategories() {
   try {
-    const resp = await fetch(browser.runtime.getURL("screentime-domains.json"));
+    const resp = await fetch(browser.runtime.getURL("screentime/screentime-domains.json"));
     const data = await resp.json();
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       throw new Error("screentime-domains.json did not parse to an object");
