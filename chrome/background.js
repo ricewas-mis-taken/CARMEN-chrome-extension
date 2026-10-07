@@ -1119,6 +1119,9 @@ async function handleTabUrl(tabId, url) {
   if (whitelisted) {
     lastAcceptableUrl = url;
     switchAwayAttemptsByTab.delete(tabId);
+    // Back on an allowed page: forget the overlay hostname so returning to the
+    // same off-task site shows the overlay again.
+    overlayDomainByTab.delete(tabId);
     uncloakTab(tabId);
     const hadOpenViolation = openViolationTabs.delete(tabId);
     if (session.source === "browser-only") return;
