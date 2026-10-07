@@ -291,7 +291,7 @@ function renderActiveSession(session) {
 
   if (session.isPaused) {
     stopCountdown();
-    countdownEl.textContent = formatCountdown(session.endTime - Date.now());
+    countdownEl.textContent = formatCountdown(session.pausedRemainingMs);
   } else {
     startCountdown(session.endTime);
   }
