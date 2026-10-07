@@ -1595,6 +1595,13 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
     // _get_status_locked) -- and only treat this as a real end if the
     // desktop confirms it. See DESIGN_DECISIONS.txt, [2026-09-28].
     const session = await getSession();
+    // getSession() reports a failed/timed-out status call as isActive:false
+    // too -- that is not the desktop confirming the session ended. Leave the
+    // session alone and look again shortly instead of POSTing /session/end.
+    if (session.desktopReachable === false) {
+      browser.alarms.create(ALARM_NAME, { when: Date.now() + 30000 });
+      return;
+    }
     await reconcileAlarmWithSession(session);
     if (session.isActive) {
       // Still active from the desktop's point of view -- reconcile above
