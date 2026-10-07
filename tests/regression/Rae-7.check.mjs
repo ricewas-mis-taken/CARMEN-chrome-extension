@@ -1,7 +1,7 @@
 // Regression check for Rae-7. Usage: node Rae-7.check.mjs [cloneRoot]. Exit 1 if bug present.
 import path from "node:path";
 import { load } from "./Rae-harness.mjs";
-const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../arena/Rae");
+const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../..");
 let bad = 0;
 for (const b of ["chrome", "firefox"]) {
   let up = true;

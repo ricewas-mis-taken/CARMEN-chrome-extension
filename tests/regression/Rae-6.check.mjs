@@ -1,6 +1,6 @@
 // Regression check for Rae-6. Usage: node Rae-6.check.mjs [cloneRoot]. Exit 1 if bug present.
 import fs from "node:fs"; import path from "node:path";
-const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../arena/Rae");
+const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../..");
 let bad = 0;
 for (const b of ["chrome", "firefox"]) {
   const src = fs.readFileSync(path.join(ROOT, b, "background.js"), "utf8");

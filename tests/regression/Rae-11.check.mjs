@@ -1,7 +1,7 @@
 // Regression check for Rae-11 (sharing build). Usage: node Rae-11.check.mjs [cloneRoot]. Exit 1 if bug present.
 import path from "node:path";
 import { load } from "./Rae-harness.mjs";
-const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../arena/Rae");
+const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../..");
 process.on("unhandledRejection", () => {});
 const h = await load(path.join(ROOT, "carmen-extension-sharing"), {});
 const ask = (msg) => Promise.race([h.send(msg), new Promise((r) => setTimeout(() => r("NO RESPONSE (callback hangs)"), 400))]);

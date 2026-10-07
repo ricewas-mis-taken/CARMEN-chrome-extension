@@ -9,7 +9,7 @@ const fail = (m) => { console.log("FAIL:", m); failed = true; };
 
 // Part 1: run the real content/overlay.js against a fake DOM; the 30s auto-dismiss must not send accepted:false.
 const sent = [], timers = [], byId = {};
-const el = () => { const e = { style: {}, children: [], addEventListener() {}, appendChild(c) { e.children.push(c); return c; }, remove() { if (e.id) delete byId[e.id]; }, set id(v) { e._id = v; byId[v] = e; }, get id() { return e._id; } }; return e; };
+const el = () => { const e = { style: {}, children: [], attachShadow() { return { appendChild() {} }; }, addEventListener() {}, appendChild(c) { e.children.push(c); return c; }, remove() { if (e.id) delete byId[e.id]; }, set id(v) { e._id = v; byId[v] = e; }, get id() { return e._id; } }; return e; };
 const document = { getElementById: (i) => byId[i] || null, createElement: el, documentElement: { appendChild: (c) => c } };
 let onMsg;
 const ctx = { window: {}, document, requestAnimationFrame: (f) => f(), setTimeout: (f, ms) => { timers.push([f, ms]); return timers.length; },

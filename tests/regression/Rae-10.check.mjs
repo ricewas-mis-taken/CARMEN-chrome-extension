@@ -1,7 +1,7 @@
 // Regression check for Rae-10 (sharing build). Usage: node Rae-10.check.mjs [cloneRoot]. Exit 1 if bug present.
 import path from "node:path";
 import { load } from "./Rae-harness.mjs";
-const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../arena/Rae");
+const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../..");
 const tabs = [{ id: 1, windowId: 1, active: true, url: "https://youtube.com/watch" }];
 const h = await load(path.join(ROOT, "carmen-extension-sharing"), { tabs });
 let creates = 0, nextId = 2;

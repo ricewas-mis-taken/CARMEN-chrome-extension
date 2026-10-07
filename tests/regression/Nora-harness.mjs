@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const ROOT = process.env.NORA_ROOT || path.resolve(here, '..', 'arena', 'Nora');
+export const ROOT = process.env.NORA_ROOT || path.resolve(here, '..', '..');
 
 export async function boot(file = 'chrome/background.js') {
   const store = {}; const alarms = {}; const listeners = {}; const calls = [];

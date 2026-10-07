@@ -1,6 +1,6 @@
 // Regression check for Rae-3. Usage: node Rae-3.check.mjs [cloneRoot]. Exit 1 if an unparseable timestamp is injected as raw HTML.
 import fs from "node:fs"; import path from "node:path";
-const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../arena/Rae");
+const ROOT = process.argv[2] || path.resolve(import.meta.dirname, "../..");
 let bad = 0;
 for (const b of ["chrome", "firefox"]) {
   const src = fs.readFileSync(path.join(ROOT, b, "log/log.js"), "utf8");
