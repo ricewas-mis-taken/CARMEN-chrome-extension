@@ -278,11 +278,9 @@ async function handleTabUrl(tabId, url) {
     return;
   }
 
-  if (!openViolationTimestampByTab.has(tabId)) {
-    const timestamp = await appendViolation(url);
-    openViolationTimestampByTab.set(tabId, timestamp);
-  }
-
+  // Only the tab the user is actually looking at can be a violation -- check
+  // that BEFORE recording one, so a background tab navigating off-list
+  // (redirect, auto-refresh, link opened in the background) isn't counted.
   let currentTab;
   try {
     currentTab = await chrome.tabs.get(tabId);
@@ -290,6 +288,11 @@ async function handleTabUrl(tabId, url) {
     return;
   }
   if (!currentTab.active) return;
+
+  if (!openViolationTimestampByTab.has(tabId)) {
+    const timestamp = await appendViolation(url);
+    openViolationTimestampByTab.set(tabId, timestamp);
+  }
 
   if (session.lockMode === "hard") {
     const isDragLockError = (err) => /may be dragging a tab/i.test(err?.message || "");
