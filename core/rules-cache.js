@@ -36,6 +36,10 @@ export async function setCachedRules(storageApi, rules) {
       domainWhitelist: Array.isArray(rules.domainWhitelist) ? rules.domainWhitelist : [],
       version: rules.version ?? 0,
       updatedAt: rules.updatedAt ?? null,
+      // Set only for an edit saved while the desktop app was unreachable --
+      // tells pollOnce() to push it once the desktop is back, since the
+      // version/updatedAt it carries still match the server's.
+      ...(rules.dirty ? { dirty: true } : {}),
     },
   });
 }

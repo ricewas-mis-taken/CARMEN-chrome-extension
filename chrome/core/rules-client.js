@@ -39,6 +39,18 @@ export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BA
     await setConnectionStatus(storageApi, "connected");
 
     const cached = await getCachedRules(storageApi);
+    if (cached.dirty) {
+      // An offline edit is waiting (see saveWhitelist) -- its version still
+      // matches the server's, so the compare below would never notice it.
+      // Push it now; the server merges if another instance moved on.
+      const pushed = await pushRules({
+        storageApi,
+        fetchImpl,
+        apiBase,
+        domainWhitelist: cached.domainWhitelist,
+      });
+      return { changed: true, rules: pushed };
+    }
     if (remote.version === cached.version && remote.updatedAt === cached.updatedAt) {
       return { changed: false, rules: cached };
     }
@@ -155,8 +167,8 @@ export async function saveWhitelist({
       err
     );
     const cached = await getCachedRules(storageApi);
-    const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt };
+    const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt, dirty: true };
     await setCachedRules(storageApi, rules);
-    return { ...rules, synced: false, merged: false };
+    return { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt, synced: false, merged: false };
   }
 }
