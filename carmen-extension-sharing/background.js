@@ -384,7 +384,10 @@ async function handleTabUrl(tabId, url) {
           }
         });
       } catch (err) {
-        if (!isDragLockError(err)) throw err;
+        if (!isDragLockError(err)) {
+          await chrome.tabs.sendMessage(tabId, { type: "hideBlackout" }).catch(() => {});
+          throw err;
+        }
         await forceCloseTab(tabId);
       }
     } catch (err) {
