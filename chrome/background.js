@@ -1328,6 +1328,16 @@ async function recheckAllActiveTabs() {
   } catch (err) {}
 }
 
+// Every window has its own active tab, but only the focused window's one is
+// being looked at -- screen time must not follow a background window's tab.
+async function isWindowFocused(windowId) {
+  try {
+    return !!(await chrome.windows.get(windowId)).focused;
+  } catch (err) {
+    return false;
+  }
+}
+
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   // The tab just switched away from is now a background tab -- cloak it
   // right away instead of waiting for the next periodic tick.
@@ -1341,7 +1351,9 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
     tabLastActiveAt.set(tabId, Date.now());
 
     const tab = await chrome.tabs.get(tabId);
-    await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
+    if (await isWindowFocused(windowId)) {
+      await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
+    }
     lastHandledUrlByTab.delete(tabId);
     await handleTabUrl(tabId, tab.url);
   } catch (err) {}
@@ -1369,7 +1381,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // Only the active tab's own navigation should retarget what's being
   // timed -- onUpdated fires for background tabs too, which must not be
   // mistaken for "the user is now looking at this domain".
-  if (tab.active && (changeInfo.url || changeInfo.status === "complete")) {
+  if (
+    tab.active &&
+    (changeInfo.url || changeInfo.status === "complete") &&
+    (await isWindowFocused(tab.windowId))
+  ) {
     await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
   }
   if (changeInfo.status === "complete" && tab.url) {
