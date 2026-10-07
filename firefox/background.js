@@ -1170,6 +1170,15 @@ async function handleTabUrl(tabId, url) {
     return;
   }
   if (!currentTab.active) return;
+  // "Active" is per window -- a second, unfocused window's active tab is not
+  // something the user is looking at, so it must not be reported/enforced
+  // either (it is handled when that window gets focus, see
+  // windows.onFocusChanged). getLastFocused() still answers while the
+  // browser as a whole is in the background.
+  try {
+    const lastFocused = await browser.windows.getLastFocused();
+    if (lastFocused && lastFocused.id !== currentTab.windowId) return;
+  } catch (err) {}
 
   if (!openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
