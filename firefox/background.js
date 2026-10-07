@@ -1711,6 +1711,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const wasLocalActive = await withStorageLock(async () => {
         const local = await getLocalSession();
         if (!local.isActive) return false;
+        if (local.isPaused) return true;
         const remainingMs = Math.max(0, local.endTime - Date.now());
         const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
