@@ -2,6 +2,20 @@ import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
 import { getApiToken, setApiToken } from "../core/api-token.js";
 
+// browser.runtime.sendMessage() REJECTS when the background has no answering
+// listener (page not up yet, or the handler never responded); chrome's callback
+// form just yields an undefined response. Every caller below already treats
+// "no response" as a failure, so normalise a rejection to that -- otherwise the
+// handler throws midway and leaves its button disabled for good.
+async function sendMessageSafe(message) {
+  try {
+    return await browser.runtime.sendMessage(message);
+  } catch (err) {
+    console.warn("CARMEN: background did not answer", message?.type, err);
+    return undefined;
+  }
+}
+
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
@@ -168,7 +182,7 @@ getApiToken(browser.storage.local).then((token) => {
 // pairing form, whose placeholder above already covers "token saved but
 // couldn't verify this instant" without looking like pairing was lost.
 async function refreshDeviceLinkStatus() {
-  const response = await browser.runtime.sendMessage({ type: "getDeviceInfo" });
+  const response = await sendMessageSafe({ type: "getDeviceInfo" });
   if (response?.ok) {
     deviceLinkNameEl.textContent = response.computerName;
     deviceLinkLinkedEl.classList.remove("hidden");
@@ -288,7 +302,7 @@ startBtn.addEventListener("click", async () => {
   startBtn.disabled = true;
   // browser.runtime.sendMessage() is promise-only in Firefox -- no callback
   // argument like chrome's -- so this awaits the response instead.
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: "startSession",
     payload: {
       durationMinutes,
@@ -325,7 +339,7 @@ reviewProgressRowEl.addEventListener("click", () => {
 reviewProgressPauseBtn.addEventListener("click", async () => {
   const willPause = reviewProgressPauseBtn.textContent.trim().startsWith("Pause");
   reviewProgressPauseBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({ type: willPause ? "pauseReview" : "resumeReview" });
+  const response = await sendMessageSafe({ type: willPause ? "pauseReview" : "resumeReview" });
   reviewProgressPauseBtn.disabled = false;
   if (response?.ok) {
     refreshStatus();
@@ -340,7 +354,7 @@ reviewProgressPauseBtn.addEventListener("click", async () => {
 pauseBtn.addEventListener("click", async () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   pauseBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: willPause ? "pauseSession" : "resumeSession",
   });
   pauseBtn.disabled = false;
@@ -368,7 +382,7 @@ screenTimeBtn.addEventListener("click", () => {
 
 nuclearBtn.addEventListener("click", async () => {
   nuclearBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({ type: "endSession" });
+  const response = await sendMessageSafe({ type: "endSession" });
   nuclearBtn.disabled = false;
   if (response?.ok) {
     stopStatusPoll();
@@ -425,7 +439,7 @@ addSiteSubmitBtn.addEventListener("click", async () => {
 
   const domain = pendingAddSiteDomain;
   addSiteSubmitBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: "addWhitelistDomain",
     payload: { domain, reason },
   });
@@ -697,7 +711,7 @@ function renderReviewProgressBanner(session) {
 }
 
 async function refreshStatus() {
-  const response = await browser.runtime.sendMessage({ type: "getStatus" });
+  const response = await sendMessageSafe({ type: "getStatus" });
   const session = response?.session;
   checkAllowSuggestion(session);
   // Shown independent of whichever view (setup/active) is picked below --
