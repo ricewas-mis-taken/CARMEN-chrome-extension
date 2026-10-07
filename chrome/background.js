@@ -61,7 +61,10 @@ async function apiFetch(path, options) {
   try {
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: controller.signal });
     if (!res.ok) {
-      throw new Error(`Desktop API ${path} responded with ${res.status}`);
+      const httpErr = new Error(`Desktop API ${path} responded with ${res.status}`);
+      // Marks "reachable but rejected" (bad token, 409, ...) apart from a network failure.
+      httpErr.httpStatus = res.status;
+      throw httpErr;
     }
     // await, not a bare return: otherwise the finally below clears the abort timer
     // the moment json() is *created*, leaving the body read unbounded.
@@ -1807,6 +1810,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           "CARMEN: could not reach desktop app to start session.",
           err
         );
+
+        // The desktop answered but refused (e.g. 401 bad token, 409): it is
+        // reachable, so never fall back to a forked browser-only session.
+        if (err && err.httpStatus) {
+          sendResponse({ ok: false, error: String(err), desktopRejected: true });
+          return;
+        }
 
         if (!browserOnly) {
           sendResponse({ ok: false, error: String(err), desktopUnreachable: true });
