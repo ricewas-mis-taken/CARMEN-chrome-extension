@@ -337,7 +337,11 @@ function isWhitelisted(url, whitelist) {
     // string first means no entry shape can throw here.
     const trimmed = String(entry ?? "").trim().toLowerCase();
     if (!trimmed) return false;
-    const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
+    // A port in the entry ("localhost:3000") can never equal URL.hostname,
+    // which never carries one -- drop it from the host part.
+    const withoutProtocol = trimmed
+      .replace(/^https?:\/\//, "")
+      .replace(/^([^/?#]*?):\d+(?=[/?#]|$)/, "$1");
     const slashIndex = withoutProtocol.indexOf("/");
     if (slashIndex === -1) {
       return equivalentHostnames(withoutProtocol).some(
