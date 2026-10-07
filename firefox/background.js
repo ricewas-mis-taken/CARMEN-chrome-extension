@@ -324,6 +324,16 @@ function equivalentHostnames(domain) {
   return group || [domain];
 }
 
+// URL.hostname is always punycode ("xn--mnchen-3ya.de"), so a Unicode entry
+// typed as "münchen.de" must be run through the same parser to compare.
+function canonicalEntryHost(host) {
+  try {
+    return new URL("http://" + host).hostname;
+  } catch (err) {
+    return host;
+  }
+}
+
 function isWhitelisted(url, whitelist) {
   if (!url) return true;
   // A non-empty STRING also has a truthy .length, so it used to pass this
@@ -353,7 +363,7 @@ function isWhitelisted(url, whitelist) {
       .replace(/^([^/?#]*?):\d+(?=[/?#]|$)/, "$1");
     const slashIndex = withoutProtocol.indexOf("/");
     if (slashIndex === -1) {
-      return equivalentHostnames(withoutProtocol).some(
+      return equivalentHostnames(canonicalEntryHost(withoutProtocol)).some(
         (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
       );
     }
@@ -369,7 +379,7 @@ function isWhitelisted(url, whitelist) {
     // regardless of its actual hostname. Anchoring the hostname check the
     // same way the no-slash branch does closes that; the boundary check on
     // the path prevents "/document" from also matching "/documentXYZ".
-    const entryDomain = withoutProtocol.slice(0, slashIndex);
+    const entryDomain = canonicalEntryHost(withoutProtocol.slice(0, slashIndex));
     const entryPath = withoutProtocol.slice(slashIndex);
     const hostnameMatches = equivalentHostnames(entryDomain).some(
       (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
