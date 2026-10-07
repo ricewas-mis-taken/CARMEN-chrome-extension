@@ -171,7 +171,9 @@
     card.appendChild(title);
     card.appendChild(list);
     card.appendChild(btnRow);
-    root.appendChild(card);
+    // Closed shadow root: the task title, domain list and buttons stay out of reach of the host page's scripts.
+    const shadow = root.attachShadow({ mode: "closed" });
+    shadow.appendChild(card);
     document.documentElement.appendChild(root);
 
     // Auto-dismiss only removes this on-page card -- it must NOT answer "No":
