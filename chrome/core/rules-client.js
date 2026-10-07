@@ -20,8 +20,24 @@ import { API_BASE, FOCUS_RULES_PATH, POLL_INTERVAL_MS } from "./constants.js";
 import { getCachedRules, setCachedRules, setConnectionStatus } from "./rules-cache.js";
 import { getApiToken } from "./api-token.js";
 
-async function fetchRules(fetchImpl, apiBase) {
-  const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, { method: "GET" });
+// fetch() has no default timeout -- a desktop app that accepts the connection
+// but never replies (a wedged single-threaded Flask server) would otherwise
+// hang pollOnce/pushRules/saveWhitelist forever, so the "unreachable"
+// fallbacks never ran. Same bound background.js's apiFetch already applies.
+export const REQUEST_TIMEOUT_MS = 5000;
+
+async function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchRules(fetchImpl, apiBase, timeoutMs) {
+  const res = await fetchWithTimeout(fetchImpl, `${apiBase}${FOCUS_RULES_PATH}`, { method: "GET" }, timeoutMs);
   if (!res.ok) {
     throw new Error(`GET ${FOCUS_RULES_PATH} responded with ${res.status}`);
   }
@@ -39,9 +55,9 @@ async function fetchRules(fetchImpl, apiBase) {
 // wrapped in the interval loop below) so background.js can also call it
 // once immediately on startup, instead of waiting a full POLL_INTERVAL_MS
 // for the first sync after the browser opens.
-export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BASE } = {}) {
+export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BASE, timeoutMs } = {}) {
   try {
-    const remote = await fetchRules(fetchImpl, apiBase);
+    const remote = await fetchRules(fetchImpl, apiBase, timeoutMs);
     await setConnectionStatus(storageApi, "connected");
 
     const cached = await getCachedRules(storageApi);
@@ -136,14 +152,20 @@ export async function pushRules({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  timeoutMs,
 }) {
   const cached = await getCachedRules(storageApi);
   const token = await getApiToken(storageApi);
-  const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
-    body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
-  });
+  const res = await fetchWithTimeout(
+    fetchImpl,
+    `${apiBase}${FOCUS_RULES_PATH}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
+      body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
+    },
+    timeoutMs
+  );
   if (!res.ok) {
     throw new Error(`POST ${FOCUS_RULES_PATH} responded with ${res.status}`);
   }
@@ -173,9 +195,10 @@ export async function saveWhitelist({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  timeoutMs,
 }) {
   try {
-    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist });
+    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist, timeoutMs });
     return { ...rules, synced: true };
   } catch (err) {
     console.warn(
