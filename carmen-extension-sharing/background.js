@@ -556,7 +556,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const endTime = await withStorageLock(async () => {
         const session = await getSession();
-        if (!session.isActive) return null;
+        if (!session.isActive || !session.isPaused) return null;
         const resumedEndTime = Date.now() + session.pausedRemainingMs;
         await setSession({ ...session, isPaused: false, endTime: resumedEndTime, pausedRemainingMs: 0 });
         return resumedEndTime;
