@@ -67,7 +67,7 @@ async function appendHistoryEntry(session) {
 async function appendViolation(url) {
   return withStorageLock(async () => {
     const session = await getSession();
-    const entry = { kind: "domain", url, timestamp: Date.now(), durationSeconds: null, resolvedAt: null };
+    const entry = { kind: "domain", url, lockMode: session.lockMode, timestamp: Date.now(), durationSeconds: null, resolvedAt: null };
     const violationLog = [...session.violationLog, entry];
     await setSession({ ...session, violationCount: session.violationCount + 1, violationLog });
     return entry.timestamp;
