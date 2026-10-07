@@ -155,7 +155,7 @@ function isWhitelisted(url, whitelist) {
     return false;
   }
   const hostname = parsed.hostname.toLowerCase();
-  const originAndPath = (parsed.origin + parsed.pathname).toLowerCase();
+  const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
     const trimmed = (entry || "").trim().toLowerCase();
@@ -166,7 +166,17 @@ function isWhitelisted(url, whitelist) {
         (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
       );
     }
-    return originAndPath.includes(withoutProtocol);
+    // Path-scoped entry: the hostname must match exactly like a bare-domain
+    // entry, and the path must match at a path boundary -- an unanchored
+    // substring test let any other host's path contain "docs.google.com/document".
+    const entryDomain = withoutProtocol.slice(0, withoutProtocol.indexOf("/"));
+    const entryPath = withoutProtocol.slice(withoutProtocol.indexOf("/"));
+    const hostnameMatches = equivalentHostnames(entryDomain).some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+    if (!hostnameMatches) return false;
+    const boundary = entryPath.endsWith("/") ? entryPath : `${entryPath}/`;
+    return pathname === entryPath || pathname.startsWith(boundary);
   });
 }
 
