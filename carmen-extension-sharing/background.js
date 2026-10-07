@@ -264,6 +264,16 @@ async function handleTabUrl(tabId, url) {
       openViolationTimestampByTab.delete(tabId);
       await resolveViolation(openTimestamp);
     }
+    // Landing on a whitelisted page in the ACTIVE tab also ends any off-task stretch in other tabs.
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t.active) {
+        for (const [otherId, ts] of Array.from(openViolationTimestampByTab)) {
+          openViolationTimestampByTab.delete(otherId);
+          await resolveViolation(ts);
+        }
+      }
+    } catch (err) {}
     return;
   }
 
