@@ -1740,11 +1740,16 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const resumedEndTime = await withStorageLock(async () => {
         const local = await getLocalSession();
         if (!local.isActive) return null;
+        if (!local.isPaused) return -1;
         const endTime = Date.now() + local.pausedRemainingMs;
         const pauseEvents = [...(local.pauseEvents || []), { kind: "resume", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0, pauseEvents });
         return endTime;
       });
+      if (resumedEndTime === -1) {
+        sendResponse({ ok: true });
+        return;
+      }
       if (resumedEndTime !== null) {
         browser.alarms.create(ALARM_NAME, { when: resumedEndTime });
         lastHandledUrlByTab.clear();
