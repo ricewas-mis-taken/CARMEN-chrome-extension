@@ -67,7 +67,7 @@ async function appendHistoryEntry(session) {
 async function appendViolation(url) {
   return withStorageLock(async () => {
     const session = await getSession();
-    const entry = { kind: "domain", url, timestamp: Date.now(), durationSeconds: null, resolvedAt: null };
+    const entry = { kind: "domain", url, lockMode: session.lockMode, timestamp: Date.now(), durationSeconds: null, resolvedAt: null };
     const violationLog = [...session.violationLog, entry];
     await setSession({ ...session, violationCount: session.violationCount + 1, violationLog });
     return entry.timestamp;
@@ -128,12 +128,11 @@ async function forceCloseTab(tabId) {
   try {
     await withDragRetry(() => removeTabVerified(tabId));
   } catch (err) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      await withDragRetry(() => removeWindowVerified(tab.windowId));
-    } catch (cleanupErr) {
-      console.error("CARMEN: could not force-close a stranded drag tab/window.", cleanupErr);
-    }
+    // Never escalate to closing the whole window: that also closes every
+    // unrelated tab in it, and holding the mouse on the tab strip is enough
+    // to trigger the drag-lock error. Give up on this one tab; the next
+    // navigation/activation event re-runs the same enforcement check.
+    console.error("CARMEN: could not force-close a stranded drag tab; leaving it for now.", err);
   }
 }
 
@@ -155,7 +154,7 @@ function isWhitelisted(url, whitelist) {
     return false;
   }
   const hostname = parsed.hostname.toLowerCase();
-  const originAndPath = (parsed.origin + parsed.pathname).toLowerCase();
+  const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
     const trimmed = (entry || "").trim().toLowerCase();
@@ -166,7 +165,17 @@ function isWhitelisted(url, whitelist) {
         (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
       );
     }
-    return originAndPath.includes(withoutProtocol);
+    // Path-scoped entry: the hostname must match exactly like a bare-domain
+    // entry, and the path must match at a path boundary -- an unanchored
+    // substring test let any other host's path contain "docs.google.com/document".
+    const entryDomain = withoutProtocol.slice(0, withoutProtocol.indexOf("/"));
+    const entryPath = withoutProtocol.slice(withoutProtocol.indexOf("/"));
+    const hostnameMatches = equivalentHostnames(entryDomain).some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+    if (!hostnameMatches) return false;
+    const boundary = entryPath.endsWith("/") ? entryPath : `${entryPath}/`;
+    return pathname === entryPath || pathname.startsWith(boundary);
   });
 }
 
@@ -250,19 +259,28 @@ async function handleTabUrl(tabId, url) {
 
   if (whitelisted) {
     switchAwayAttemptsByTab.delete(tabId);
+    overlayDomainByTab.delete(tabId);
     const openTimestamp = openViolationTimestampByTab.get(tabId);
     if (openTimestamp !== undefined) {
       openViolationTimestampByTab.delete(tabId);
       await resolveViolation(openTimestamp);
     }
+    // Landing on a whitelisted page in the ACTIVE tab also ends any off-task stretch in other tabs.
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t.active) {
+        for (const [otherId, ts] of Array.from(openViolationTimestampByTab)) {
+          openViolationTimestampByTab.delete(otherId);
+          await resolveViolation(ts);
+        }
+      }
+    } catch (err) {}
     return;
   }
 
-  if (!openViolationTimestampByTab.has(tabId)) {
-    const timestamp = await appendViolation(url);
-    openViolationTimestampByTab.set(tabId, timestamp);
-  }
-
+  // Only the tab the user is actually looking at can be a violation -- check
+  // that BEFORE recording one, so a background tab navigating off-list
+  // (redirect, auto-refresh, link opened in the background) isn't counted.
   let currentTab;
   try {
     currentTab = await chrome.tabs.get(tabId);
@@ -270,6 +288,11 @@ async function handleTabUrl(tabId, url) {
     return;
   }
   if (!currentTab.active) return;
+
+  if (!openViolationTimestampByTab.has(tabId)) {
+    const timestamp = await appendViolation(url);
+    openViolationTimestampByTab.set(tabId, timestamp);
+  }
 
   if (session.lockMode === "hard") {
     const isDragLockError = (err) => /may be dragging a tab/i.test(err?.message || "");
@@ -304,10 +327,18 @@ async function handleTabUrl(tabId, url) {
             await chrome.windows.update(currentTab.windowId, { state: "minimized" });
           }
         } else {
-          const fallback = buildFallbackUrl(session.domainWhitelist);
-          if (!fallback) return;
+          // Never open a whitelisted URL here: if that entry redirects off the
+          // whitelist the new tab is itself a violation and this runs again,
+          // forever (the main build fixed this; see its HOMEPAGE_URL notes).
+          // The browser's own new-tab page cannot be a violation. Reuse one
+          // already open from a previous redirect instead of piling them up.
+          const homepage = tabs.find((t) => t.id !== tabId && t.url === "chrome://newtab/");
+          if (homepage) {
+            await chrome.tabs.update(homepage.id, { active: true });
+            return;
+          }
           await chrome.tabs.create({
-            url: fallback,
+            url: "chrome://newtab/",
             active: true,
             windowId: currentTab.windowId,
           });
@@ -353,7 +384,10 @@ async function handleTabUrl(tabId, url) {
           }
         });
       } catch (err) {
-        if (!isDragLockError(err)) throw err;
+        if (!isDragLockError(err)) {
+          await chrome.tabs.sendMessage(tabId, { type: "hideBlackout" }).catch(() => {});
+          throw err;
+        }
         await forceCloseTab(tabId);
       }
     } catch (err) {
@@ -428,7 +462,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
+  // Closing a still-violating tab resolves its open violation, the same as
+  // navigating back to a whitelisted URL does.
+  const openTimestamp = openViolationTimestampByTab.get(tabId);
   openViolationTimestampByTab.delete(tabId);
+  if (openTimestamp !== undefined) resolveViolation(openTimestamp);
   switchAwayAttemptsByTab.delete(tabId);
 });
 
@@ -458,6 +496,11 @@ async function endActiveSession() {
   return withStorageLock(async () => {
     const session = await getSession();
     if (!session.isActive) return session;
+    // Close violations still open at the end so history shows a duration.
+    const nowMs = Date.now();
+    session.violationLog = (session.violationLog || []).map((e) =>
+      e.resolvedAt ? e : { ...e, resolvedAt: nowMs, durationSeconds: (nowMs - e.timestamp) / 1000 }
+    );
     await appendHistoryEntry(session);
     await setSession(defaultSession());
     return session;
@@ -476,6 +519,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
+      // A missing/malformed payload used to throw here before sendResponse
+      // was ever called, leaving the sender's callback hanging forever.
+      if (!message.payload || typeof message.payload !== "object") {
+        sendResponse({ ok: false, error: "payload is required" });
+        return;
+      }
       const { durationMinutes, lockMode, domainWhitelist } = message.payload;
       const endTime = Date.now() + durationMinutes * 60 * 1000;
 
@@ -491,6 +540,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       lastHandledUrlByTab.clear();
       openViolationTimestampByTab.clear();
+      overlayDomainByTab.clear();
+      switchAwayAttemptsByTab.clear();
       await resetSessionAdditions();
       await chrome.alarms.clear(ALARM_NAME);
       chrome.alarms.create(ALARM_NAME, { when: endTime });
@@ -514,7 +565,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const paused = await withStorageLock(async () => {
         const session = await getSession();
-        if (!session.isActive) return false;
+        if (!session.isActive || session.isPaused) return false;
         const remainingMs = Math.max(0, session.endTime - Date.now());
         await setSession({ ...session, isPaused: true, pausedRemainingMs: remainingMs });
         return true;
@@ -533,7 +584,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const endTime = await withStorageLock(async () => {
         const session = await getSession();
-        if (!session.isActive) return null;
+        if (!session.isActive || !session.isPaused) return null;
         const resumedEndTime = Date.now() + session.pausedRemainingMs;
         await setSession({ ...session, isPaused: false, endTime: resumedEndTime, pausedRemainingMs: 0 });
         return resumedEndTime;
@@ -553,7 +604,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "addWhitelistDomain") {
     (async () => {
       const { domain, reason } = message.payload || {};
-      if (!domain || !domain.trim() || !reason || !reason.trim()) {
+      if (
+        typeof domain !== "string" || !domain.trim() ||
+        typeof reason !== "string" || !reason.trim()
+      ) {
         sendResponse({ ok: false, error: "domain and reason are both required" });
         return;
       }

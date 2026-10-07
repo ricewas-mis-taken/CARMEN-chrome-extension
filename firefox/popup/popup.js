@@ -2,6 +2,20 @@ import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
 import { getApiToken, setApiToken } from "../core/api-token.js";
 
+// browser.runtime.sendMessage() REJECTS when the background has no answering
+// listener (page not up yet, or the handler never responded); chrome's callback
+// form just yields an undefined response. Every caller below already treats
+// "no response" as a failure, so normalise a rejection to that -- otherwise the
+// handler throws midway and leaves its button disabled for good.
+async function sendMessageSafe(message) {
+  try {
+    return await browser.runtime.sendMessage(message);
+  } catch (err) {
+    console.warn("CARMEN: background did not answer", message?.type, err);
+    return undefined;
+  }
+}
+
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
@@ -87,7 +101,23 @@ const parseLines = (value) =>
 // storage.local -- background.js's polling keeps it up to date with
 // whatever the desktop app has, which may have been edited from a
 // different Chrome profile, Edge, or Firefox since this popup last opened.
-const whitelistLoaded = getCachedRules(browser.storage.local).then(({ domainWhitelist }) => {
+// The cache version the textarea below was loaded from -- saves are pushed
+// against THIS version (not whatever the cache has moved to by the time the
+// user clicks), so the desktop merges a change another device made while the
+// popup was open instead of overwriting it.
+let whitelistBaseVersion;
+async function saveEditedWhitelist(domainWhitelist) {
+  const result = await saveWhitelist({
+    storageApi: browser.storage.local,
+    domainWhitelist,
+    baseVersion: whitelistBaseVersion,
+  });
+  if (result.synced) whitelistBaseVersion = result.version;
+  return result;
+}
+
+const whitelistLoaded = getCachedRules(browser.storage.local).then(({ domainWhitelist, version }) => {
+  whitelistBaseVersion = version;
   if (Array.isArray(domainWhitelist) && domainWhitelist.length > 0) {
     whitelistTextarea.value = domainWhitelist.join("\n");
   }
@@ -117,7 +147,7 @@ async function refreshReviewAdditionsButton() {
 
 reviewAdditionsBtn.addEventListener("click", async () => {
   await whitelistLoaded;
-  await saveWhitelist({ storageApi: browser.storage.local, domainWhitelist: parseLines(whitelistTextarea.value) });
+  await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   browser.tabs.create({ url: browser.runtime.getURL("additions/additions.html") });
 });
 
@@ -132,10 +162,7 @@ saveWhitelistBtn.addEventListener("click", async () => {
   await whitelistLoaded;
   saveWhitelistBtn.disabled = true;
   saveWhitelistStatusEl.textContent = "Saving…";
-  const result = await saveWhitelist({
-    storageApi: browser.storage.local,
-    domainWhitelist: parseLines(whitelistTextarea.value),
-  });
+  const result = await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   if (!result.synced) {
     saveWhitelistStatusEl.textContent = "Saved to this device — will sync once the desktop app is reachable.";
   } else if (result.merged) {
@@ -168,7 +195,7 @@ getApiToken(browser.storage.local).then((token) => {
 // pairing form, whose placeholder above already covers "token saved but
 // couldn't verify this instant" without looking like pairing was lost.
 async function refreshDeviceLinkStatus() {
-  const response = await browser.runtime.sendMessage({ type: "getDeviceInfo" });
+  const response = await sendMessageSafe({ type: "getDeviceInfo" });
   if (response?.ok) {
     deviceLinkNameEl.textContent = response.computerName;
     deviceLinkLinkedEl.classList.remove("hidden");
@@ -278,14 +305,17 @@ startBtn.addEventListener("click", async () => {
   // profile/Edge/Firefox instance's next poll picks up this edit too; if
   // the desktop app is unreachable it still saves to this profile's own
   // cache so the edit isn't lost, it just doesn't propagate yet.
-  await saveWhitelist({ storageApi: browser.storage.local, domainWhitelist });
+  // Disable BEFORE awaiting the (network) whitelist push -- a second click
+  // during that await used to re-enter this handler and start a second session.
+  startBtn.disabled = true;
+  await saveEditedWhitelist(domainWhitelist);
 
   const browserOnly = awaitingBrowserOnlyConfirm;
 
   startBtn.disabled = true;
   // browser.runtime.sendMessage() is promise-only in Firefox -- no callback
   // argument like chrome's -- so this awaits the response instead.
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: "startSession",
     payload: {
       durationMinutes,
@@ -322,7 +352,7 @@ reviewProgressRowEl.addEventListener("click", () => {
 reviewProgressPauseBtn.addEventListener("click", async () => {
   const willPause = reviewProgressPauseBtn.textContent.trim().startsWith("Pause");
   reviewProgressPauseBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({ type: willPause ? "pauseReview" : "resumeReview" });
+  const response = await sendMessageSafe({ type: willPause ? "pauseReview" : "resumeReview" });
   reviewProgressPauseBtn.disabled = false;
   if (response?.ok) {
     refreshStatus();
@@ -337,7 +367,7 @@ reviewProgressPauseBtn.addEventListener("click", async () => {
 pauseBtn.addEventListener("click", async () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   pauseBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: willPause ? "pauseSession" : "resumeSession",
   });
   pauseBtn.disabled = false;
@@ -365,7 +395,7 @@ screenTimeBtn.addEventListener("click", () => {
 
 nuclearBtn.addEventListener("click", async () => {
   nuclearBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({ type: "endSession" });
+  const response = await sendMessageSafe({ type: "endSession" });
   nuclearBtn.disabled = false;
   if (response?.ok) {
     stopStatusPoll();
@@ -422,7 +452,7 @@ addSiteSubmitBtn.addEventListener("click", async () => {
 
   const domain = pendingAddSiteDomain;
   addSiteSubmitBtn.disabled = true;
-  const response = await browser.runtime.sendMessage({
+  const response = await sendMessageSafe({
     type: "addWhitelistDomain",
     payload: { domain, reason },
   });
@@ -461,6 +491,8 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+let lastZeroRefreshAt = 0;
+
 function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
   stopCountdown();
   const tick = () => {
@@ -498,7 +530,17 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
         // check decide -- showSetupView() only if the session is genuinely
         // over, otherwise refreshStatus() re-renders the new phase/endTime.
         stopCountdown();
-        refreshStatus();
+        // Throttled: if the desktop keeps reporting this session as active
+        // with no time left (it is still finalizing, or its secondsRemaining
+        // is stale), an unconditional immediate refresh re-renders, restarts
+        // this countdown, hits zero again and refreshes again -- a tight loop
+        // of getStatus round trips (each one a request to the desktop). The 3s
+        // status poll is still running and picks up the real state.
+        const now = Date.now();
+        if (now - lastZeroRefreshAt >= 2000) {
+          lastZeroRefreshAt = now;
+          refreshStatus();
+        }
       }
     }
   };
@@ -694,7 +736,7 @@ function renderReviewProgressBanner(session) {
 }
 
 async function refreshStatus() {
-  const response = await browser.runtime.sendMessage({ type: "getStatus" });
+  const response = await sendMessageSafe({ type: "getStatus" });
   const session = response?.session;
   checkAllowSuggestion(session);
   // Shown independent of whichever view (setup/active) is picked below --

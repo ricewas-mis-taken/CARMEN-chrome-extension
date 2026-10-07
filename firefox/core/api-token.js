@@ -11,9 +11,15 @@
 // extension is installed in.
 export const API_TOKEN_KEY = "carmenApiToken";
 
+// Text that is legal in an HTTP header value. A token outside this (a pasted
+// typographic character, a stray newline) would make fetch() throw on every
+// request that carries it, which reads as "desktop unreachable" everywhere.
+const HEADER_SAFE = /^[ -~]*$/;
+
 export async function getApiToken(storageApi) {
   const result = await storageApi.get(API_TOKEN_KEY);
-  return result[API_TOKEN_KEY] || "";
+  const token = result[API_TOKEN_KEY];
+  return typeof token === "string" && HEADER_SAFE.test(token) ? token : "";
 }
 
 export async function setApiToken(storageApi, token) {

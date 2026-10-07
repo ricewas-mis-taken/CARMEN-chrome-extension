@@ -22,7 +22,7 @@ let DOMAIN_CATEGORIES = {};
 
 async function loadDomainCategories() {
   try {
-    const resp = await fetch(browser.runtime.getURL("screentime-domains.json"));
+    const resp = await fetch(browser.runtime.getURL("screentime/screentime-domains.json"));
     const data = await resp.json();
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       throw new Error("screentime-domains.json did not parse to an object");
@@ -44,11 +44,16 @@ const GROUP_THRESHOLD_SECONDS = 5 * 60;
 
 function categorizeDomain(domain) {
   const key = (domain || "").toLowerCase().replace(/^www\./, "");
-  if (DOMAIN_CATEGORIES[key]) return DOMAIN_CATEGORIES[key];
+  // Own-property lookups only: a hostname like "constructor" or "__proto__"
+  // would otherwise resolve to an inherited Object.prototype member.
+  const own = (k) => Object.prototype.hasOwnProperty.call(DOMAIN_CATEGORIES, k) && DOMAIN_CATEGORIES[k];
+  if (own(key)) return DOMAIN_CATEGORIES[key];
+  // Walk up the suffixes (m.site.co.uk -> site.co.uk -> co.uk), not just the
+  // last two labels, so subdomains of 3+ label entries still categorize.
   const parts = key.split(".");
-  if (parts.length > 2) {
-    const parent = parts.slice(-2).join(".");
-    if (DOMAIN_CATEGORIES[parent]) return DOMAIN_CATEGORIES[parent];
+  for (let i = 1; i < parts.length - 1; i++) {
+    const parent = parts.slice(i).join(".");
+    if (own(parent)) return DOMAIN_CATEGORIES[parent];
   }
   return "Other";
 }
@@ -81,7 +86,7 @@ function weekDayKeys(date) {
 }
 
 function aggregate(byDay, keys) {
-  const totals = {};
+  const totals = Object.create(null);
   for (const key of keys) {
     const bucket = byDay[key];
     if (!bucket) continue;

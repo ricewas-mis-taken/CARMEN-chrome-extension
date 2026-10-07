@@ -171,13 +171,17 @@
     card.appendChild(title);
     card.appendChild(list);
     card.appendChild(btnRow);
-    root.appendChild(card);
+    // Closed shadow root: the task title, domain list and buttons stay out of reach of the host page's scripts.
+    const shadow = root.attachShadow({ mode: "closed" });
+    shadow.appendChild(card);
     document.documentElement.appendChild(root);
 
-    // Auto-dismiss (as a "No") rather than leaving a stale prompt on screen
-    // forever if the user just never interacts with it.
+    // Auto-dismiss only removes this on-page card -- it must NOT answer "No":
+    // the pending prompt is shared with the persistent notification, which
+    // the user may still click "Yes, save" on after being away for 30s.
     setTimeout(() => {
-      if (document.getElementById(SAVE_DOMAINS_ID)) respond(false);
+      const card = document.getElementById(SAVE_DOMAINS_ID);
+      if (card) card.remove();
     }, 30000);
   }
 

@@ -20,12 +20,34 @@ import { API_BASE, FOCUS_RULES_PATH, POLL_INTERVAL_MS } from "./constants.js";
 import { getCachedRules, setCachedRules, setConnectionStatus } from "./rules-cache.js";
 import { getApiToken } from "./api-token.js";
 
-async function fetchRules(fetchImpl, apiBase) {
-  const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, { method: "GET" });
+// fetch() has no default timeout -- a desktop app that accepts the connection
+// but never replies (a wedged single-threaded Flask server) would otherwise
+// hang pollOnce/pushRules/saveWhitelist forever, so the "unreachable"
+// fallbacks never ran. Same bound background.js's apiFetch already applies.
+export const REQUEST_TIMEOUT_MS = 5000;
+
+async function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchRules(fetchImpl, apiBase, timeoutMs) {
+  const res = await fetchWithTimeout(fetchImpl, `${apiBase}${FOCUS_RULES_PATH}`, { method: "GET" }, timeoutMs);
   if (!res.ok) {
     throw new Error(`GET ${FOCUS_RULES_PATH} responded with ${res.status}`);
   }
-  return res.json();
+  const body = await res.json();
+  // A 200 that is not a ruleset (wrong service on the port, an error body)
+  // must be treated like an unreachable desktop, never as "the list is empty".
+  if (!body || typeof body !== "object" || !Array.isArray(body.domainWhitelist) || typeof body.version !== "number") {
+    throw new Error(`GET ${FOCUS_RULES_PATH} returned a malformed rules document`);
+  }
+  return body;
 }
 
 // One poll attempt: fetch, compare version against the cache, and only
@@ -33,13 +55,35 @@ async function fetchRules(fetchImpl, apiBase) {
 // wrapped in the interval loop below) so background.js can also call it
 // once immediately on startup, instead of waiting a full POLL_INTERVAL_MS
 // for the first sync after the browser opens.
-export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BASE } = {}) {
+export async function pollOnce({ storageApi, fetchImpl = fetch, apiBase = API_BASE, timeoutMs } = {}) {
   try {
-    const remote = await fetchRules(fetchImpl, apiBase);
+    const remote = await fetchRules(fetchImpl, apiBase, timeoutMs);
     await setConnectionStatus(storageApi, "connected");
 
     const cached = await getCachedRules(storageApi);
+    if (cached.dirty) {
+      // An offline edit is waiting (see saveWhitelist) -- its version still
+      // matches the server's, so the compare below would never notice it.
+      // Push it now; the server merges if another instance moved on.
+      const pushed = await pushRules({
+        storageApi,
+        fetchImpl,
+        apiBase,
+        domainWhitelist: cached.domainWhitelist,
+      });
+      return { changed: true, rules: pushed };
+    }
     if (remote.version === cached.version && remote.updatedAt === cached.updatedAt) {
+      return { changed: false, rules: cached };
+    }
+    // A response that was already in flight when a newer save landed is
+    // older than the cache -- writing it would roll the edit back. A genuine
+    // server reset also lowers the version, but then updatedAt is newer.
+    if (
+      typeof remote.version === "number" &&
+      remote.version < cached.version &&
+      !(Date.parse(remote.updatedAt) > Date.parse(cached.updatedAt))
+    ) {
       return { changed: false, rules: cached };
     }
 
@@ -108,14 +152,27 @@ export async function pushRules({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  // The version the edit was made against (e.g. what the popup's textarea was
+  // loaded from). Defaults to this profile's current cache, which is only
+  // right if nothing refreshed it since the user started editing -- a
+  // background poll that picked up another device's change in the meantime
+  // would otherwise make the server see a "plain edit" and replace, dropping
+  // that change instead of merging.
+  baseVersion,
+  timeoutMs,
 }) {
   const cached = await getCachedRules(storageApi);
   const token = await getApiToken(storageApi);
-  const res = await fetchImpl(`${apiBase}${FOCUS_RULES_PATH}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
-    body: JSON.stringify({ domainWhitelist, baseVersion: cached.version }),
-  });
+  const res = await fetchWithTimeout(
+    fetchImpl,
+    `${apiBase}${FOCUS_RULES_PATH}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Carmen-Token": token },
+      body: JSON.stringify({ domainWhitelist, baseVersion: baseVersion ?? cached.version }),
+    },
+    timeoutMs
+  );
   if (!res.ok) {
     throw new Error(`POST ${FOCUS_RULES_PATH} responded with ${res.status}`);
   }
@@ -145,9 +202,11 @@ export async function saveWhitelist({
   fetchImpl = fetch,
   apiBase = API_BASE,
   domainWhitelist,
+  baseVersion,
+  timeoutMs,
 }) {
   try {
-    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist });
+    const rules = await pushRules({ storageApi, fetchImpl, apiBase, domainWhitelist, baseVersion, timeoutMs });
     return { ...rules, synced: true };
   } catch (err) {
     console.warn(
@@ -155,8 +214,8 @@ export async function saveWhitelist({
       err
     );
     const cached = await getCachedRules(storageApi);
-    const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt };
+    const rules = { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt, dirty: true };
     await setCachedRules(storageApi, rules);
-    return { ...rules, synced: false, merged: false };
+    return { domainWhitelist, version: cached.version, updatedAt: cached.updatedAt, synced: false, merged: false };
   }
 }

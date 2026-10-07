@@ -68,15 +68,21 @@ async function apiFetch(path, options) {
   try {
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: controller.signal });
     if (!res.ok) {
-      throw new Error(`Desktop API ${path} responded with ${res.status}`);
+      const httpErr = new Error(`Desktop API ${path} responded with ${res.status}`);
+      // Marks "reachable but rejected" (bad token, 409, ...) apart from a network failure.
+      httpErr.httpStatus = res.status;
+      throw httpErr;
     }
-    return res.json();
+    // await, not a bare return: otherwise the finally below clears the abort timer
+    // the moment json() is *created*, leaving the body read unbounded.
+    return await res.json();
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
 const LOCAL_SESSION_KEY = "browserOnlySession";
+const LOCAL_EXPIRY_GRACE_MS = 5000;
 
 function defaultLocalSession() {
   return {
@@ -167,6 +173,14 @@ function computeActiveElapsedMs(startedAt, events) {
   return Math.max(0, total);
 }
 
+// Last desktop-reported ACTIVE session, kept in memory so one failed /status
+// call (timeout, 5xx, desktop restarting) does not read as "no session" and
+// silently drop enforcement and uncloak every tab. Only trusted for a short
+// grace window; after that an unreachable desktop falls back to "no session"
+// exactly as before.
+const DESKTOP_SESSION_GRACE_MS = 2 * 60 * 1000;
+let lastDesktopSession = null;
+
 async function getSession() {
   // A browser-only session, once started, must keep being enforced from
   // local state for its whole duration regardless of what the desktop API
@@ -182,7 +196,17 @@ async function getSession() {
   // violation reporting) and status display for the local session that
   // was still legitimately running, with browser.alarms the only thing
   // still ticking toward its eventual end.
-  const local = await getLocalSession();
+  let local = await getLocalSession();
+  // A browser-only session whose endTime has long passed is over, even if its
+  // alarm never fired (alarms don't reliably survive a browser restart).
+  // The grace window keeps this from racing the alarm handler, which is the
+  // normal path that ends it and shows the completion notification.
+  if (local.isActive && !local.isPaused && local.endTime && local.endTime + LOCAL_EXPIRY_GRACE_MS <= Date.now()) {
+    await setLocalSession(defaultLocalSession());
+    lastAcceptableUrl = "";
+    notifyLocalSessionComplete(local);
+    local = defaultLocalSession();
+  }
   if (local.isActive) {
     const startedAt = local.startedAt || null;
     const activeElapsedMs = computeActiveElapsedMs(startedAt, local.pauseEvents);
@@ -190,7 +214,9 @@ async function getSession() {
       isActive: true,
       isPaused: local.isPaused,
       isBurnout: false,
-      endTime: local.endTime,
+      // A paused session's stored endTime is stale (it's only re-based on
+      // resume) -- report the frozen remaining time instead.
+      endTime: local.isPaused ? Date.now() + (local.pausedRemainingMs || 0) : local.endTime,
       startedAt,
       activeElapsedMs,
       lockMode: local.lockMode,
@@ -215,7 +241,7 @@ async function getSession() {
     const isPaused = !!data.isPaused;
     const startedAt = toMs(data.startTime);
     const activeElapsedMs = isActive ? computeActiveElapsedMs(startedAt, data.violationLog) : 0;
-    return {
+    const session = {
       isActive,
       isPaused,
       // True during a pomodoro session's break phase (see carmen-desktop's
@@ -253,6 +279,8 @@ async function getSession() {
       reviewInProgress: data.reviewInProgress || null,
       desktopReachable: true,
     };
+    lastDesktopSession = isActive ? { session, at: Date.now() } : null;
+    return session;
   } catch (err) {
     console.warn(
       "CARMEN: could not reach desktop app at",
@@ -260,6 +288,14 @@ async function getSession() {
       "- no browser-only session either.",
       err
     );
+    const held = lastDesktopSession;
+    if (
+      held &&
+      Date.now() - held.at < DESKTOP_SESSION_GRACE_MS &&
+      (held.session.isPaused || held.session.endTime > Date.now())
+    ) {
+      return { ...held.session, lastAcceptableUrl, desktopReachable: false };
+    }
     return { ...defaultSession(), desktopReachable: false };
   }
 }
@@ -311,6 +347,16 @@ function equivalentHostnames(domain) {
   return group || [domain];
 }
 
+// URL.hostname is always punycode ("xn--mnchen-3ya.de"), so a Unicode entry
+// typed as "münchen.de" must be run through the same parser to compare.
+function canonicalEntryHost(host) {
+  try {
+    return new URL("http://" + host).hostname;
+  } catch (err) {
+    return host;
+  }
+}
+
 function isWhitelisted(url, whitelist) {
   if (!url) return true;
   // A non-empty STRING also has a truthy .length, so it used to pass this
@@ -324,7 +370,8 @@ function isWhitelisted(url, whitelist) {
   } catch (err) {
     return false;
   }
-  const hostname = parsed.hostname.toLowerCase();
+  // A fully-qualified "example.org." is the same host as "example.org".
+  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
   const pathname = parsed.pathname.toLowerCase();
 
   return whitelist.some((entry) => {
@@ -333,10 +380,20 @@ function isWhitelisted(url, whitelist) {
     // string first means no entry shape can throw here.
     const trimmed = String(entry ?? "").trim().toLowerCase();
     if (!trimmed) return false;
-    const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
+    // A port in the entry ("localhost:3000") can never equal URL.hostname,
+    // which never carries one -- drop it from the host part.
+    // "*.example.com" and ".example.com" are the usual ways people write "this
+    // domain and its subdomains" -- an entry matches subdomains anyway, so just
+    // drop the wildcard/leading dot instead of letting it silently never match.
+    const withoutProtocol = trimmed
+      .replace(/^https?:\/\//, "")
+      .replace(/^\*?\./, "")
+      // Query/fragment never take part in matching (the URL's pathname has neither).
+      .replace(/[?#].*$/, "")
+      .replace(/^([^/?#]*?):\d+(?=[/?#]|$)/, "$1");
     const slashIndex = withoutProtocol.indexOf("/");
     if (slashIndex === -1) {
-      return equivalentHostnames(withoutProtocol).some(
+      return equivalentHostnames(canonicalEntryHost(withoutProtocol)).some(
         (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
       );
     }
@@ -352,8 +409,12 @@ function isWhitelisted(url, whitelist) {
     // regardless of its actual hostname. Anchoring the hostname check the
     // same way the no-slash branch does closes that; the boundary check on
     // the path prevents "/document" from also matching "/documentXYZ".
-    const entryDomain = withoutProtocol.slice(0, slashIndex);
-    const entryPath = withoutProtocol.slice(slashIndex);
+    const entryDomain = canonicalEntryHost(withoutProtocol.slice(0, slashIndex));
+    // Percent-encode the way URL.pathname is, so "my notes" / "café" match.
+    let entryPath = withoutProtocol.slice(slashIndex);
+    try {
+      entryPath = new URL("http://x" + entryPath).pathname.toLowerCase();
+    } catch (err) {}
     const hostnameMatches = equivalentHostnames(entryDomain).some(
       (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
     );
@@ -442,6 +503,9 @@ async function notifySessionComplete() {
 }
 
 const SAVE_DOMAINS_PROMPT_KEY = "pendingDomainSavePrompt";
+// One entry per task: each persistent notification must apply the sites of the task it was shown for,
+// not whichever prompt happens to be newest in the single slot above.
+const SAVE_DOMAINS_BY_TASK_KEY = "pendingDomainSavePromptsByTask";
 const SAVE_DOMAINS_NOTIFICATION_PREFIX = "carmenSaveDomains:";
 
 // Offers to save sites allowed mid-session (via the "Allow this site?"
@@ -465,18 +529,41 @@ async function maybeOfferToSaveDomains(entry) {
 
   const taskId = entry.eventId;
   const taskTitle = entry.eventTitle || "this task";
+  const byTaskData = await browser.storage.local.get(SAVE_DOMAINS_BY_TASK_KEY);
+  const byTask = { ...(byTaskData[SAVE_DOMAINS_BY_TASK_KEY] || {}), [taskId]: { taskId, taskTitle, domains } };
   await browser.storage.local.set({
     [SAVE_DOMAINS_PROMPT_KEY]: { taskId, taskTitle, domains },
+    [SAVE_DOMAINS_BY_TASK_KEY]: byTask,
   });
 
-  browser.notifications.create(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${taskId}`, {
+  // Firefox's notifications API has no `buttons` or `requireInteraction`
+  // (create() rejects/throws on unsupported properties), so try the full
+  // Chrome-style notification first and fall back to a plain informational
+  // one -- either way the overlay below must still get shown, since on
+  // Firefox it is the only surface that can answer Yes/No.
+  const notificationId = `${SAVE_DOMAINS_NOTIFICATION_PREFIX}${taskId}`;
+  const notificationBase = {
     type: "basic",
     iconUrl: browser.runtime.getURL("icon128.png"),
     title: `Save ${domains.length} site${domains.length === 1 ? "" : "s"} to "${taskTitle}"?`,
     message: domains.join(", "),
-    buttons: [{ title: "Yes, save" }, { title: "No" }],
-    requireInteraction: true,
-  });
+  };
+  try {
+    await browser.notifications.create(notificationId, {
+      ...notificationBase,
+      buttons: [{ title: "Yes, save" }, { title: "No" }],
+      requireInteraction: true,
+    });
+  } catch (err) {
+    try {
+      await browser.notifications.create(notificationId, {
+        ...notificationBase,
+        message: `${notificationBase.message} -- answer in the prompt on the page.`,
+      });
+    } catch (err2) {
+      console.warn("CARMEN: could not show the save-domains notification.", err2);
+    }
+  }
 
   try {
     const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
@@ -493,8 +580,23 @@ async function maybeOfferToSaveDomains(entry) {
 // pushing it to the desktop app, then clears it either way -- accepted or
 // not, a stale pending entry must never get applied later by an unrelated
 // future click.
-async function applyPendingDomainSave() {
-  const { [SAVE_DOMAINS_PROMPT_KEY]: pending } = await browser.storage.local.get(SAVE_DOMAINS_PROMPT_KEY);
+async function dropPendingDomainSave(taskId) {
+  const data = await browser.storage.local.get([SAVE_DOMAINS_PROMPT_KEY, SAVE_DOMAINS_BY_TASK_KEY]);
+  const byTask = { ...(data[SAVE_DOMAINS_BY_TASK_KEY] || {}) };
+  delete byTask[taskId];
+  await browser.storage.local.set({ [SAVE_DOMAINS_BY_TASK_KEY]: byTask });
+  if (data[SAVE_DOMAINS_PROMPT_KEY] && data[SAVE_DOMAINS_PROMPT_KEY].taskId === taskId) {
+    await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+  }
+}
+
+async function applyPendingDomainSave(taskId) {
+  const data = await browser.storage.local.get([SAVE_DOMAINS_PROMPT_KEY, SAVE_DOMAINS_BY_TASK_KEY]);
+  // A notification click names its task; the on-page prompt has no id and means the newest one.
+  const single = data[SAVE_DOMAINS_PROMPT_KEY];
+  const pending = taskId !== undefined
+    ? (data[SAVE_DOMAINS_BY_TASK_KEY] || {})[taskId] || (single && single.taskId === taskId ? single : undefined)
+    : single;
   if (!pending) return;
   try {
     await apiFetch(`/tasks/${encodeURIComponent(pending.taskId)}/domain-whitelist`, {
@@ -505,18 +607,21 @@ async function applyPendingDomainSave() {
   } catch (err) {
     console.warn("CARMEN: could not save allowed sites to the task.", err);
   } finally {
-    await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    await dropPendingDomainSave(pending.taskId);
     browser.notifications.clear(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${pending.taskId}`);
   }
 }
 
-browser.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+// notifications.onButtonClicked does not exist in Firefox -- registering on
+// it unguarded threw at module load and killed the entire background script.
+browser.notifications.onButtonClicked?.addListener((notificationId, buttonIndex) => {
   if (!notificationId.startsWith(SAVE_DOMAINS_NOTIFICATION_PREFIX)) return;
   browser.notifications.clear(notificationId);
+  const clickedTaskId = notificationId.slice(SAVE_DOMAINS_NOTIFICATION_PREFIX.length);
   if (buttonIndex === 0) {
-    applyPendingDomainSave();
+    applyPendingDomainSave(clickedTaskId);
   } else {
-    browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    dropPendingDomainSave(clickedTaskId);
   }
 });
 
@@ -524,6 +629,18 @@ const lastHandledUrlByTab = new Map();
 const overlayDomainByTab = new Map();
 const activeTabByWindow = new Map();
 const openViolationTabs = new Set();
+// Persisted (like cloakedTabIds): the MV3 worker/event page can be unloaded at any idle moment, and the
+// desktop's single open violation could otherwise never be resolved by the tab that opened it.
+const OPEN_VIOLATION_TABS_KEY = "openViolationTabIds";
+function persistOpenViolationTabs() {
+  browser.storage.local.set({ [OPEN_VIOLATION_TABS_KEY]: Array.from(openViolationTabs) }).catch(() => {});
+}
+const openViolationsHydrated = browser.storage.local
+  .get(OPEN_VIOLATION_TABS_KEY)
+  .then((data) => {
+    for (const id of data[OPEN_VIOLATION_TABS_KEY] || []) openViolationTabs.add(id);
+  })
+  .catch(() => {});
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
 
@@ -600,8 +717,9 @@ const SCREEN_TIME_CURRENT_KEY = "screenTimeCurrent";
 // Caps a single checkpoint's elapsed time -- guards against a stale
 // startedAt (the worker was suspended for a long time before the next
 // event or the periodic alarm woke it) inflating one leg unrealistically.
-const SCREEN_TIME_MAX_LEG_SECONDS = 3600;
+const SCREEN_TIME_MAX_LEG_SECONDS = 300;
 const SCREEN_TIME_ALARM_NAME = "screenTimeCheckpoint";
+const SCREEN_TIME_RETENTION_DAYS = 35;
 
 function screenTimeDayKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -619,13 +737,22 @@ function screenTimeDomainForUrl(url) {
 // itself (withStorageLock's single queue isn't reentrant).
 async function addScreenTimeSecondsLocked(domain, seconds) {
   if (!domain || seconds <= 0) return;
-  seconds = Math.min(seconds, SCREEN_TIME_MAX_LEG_SECONDS);
+  // Every live leg is re-checkpointed each minute, so one this old is stale (browser closed, machine asleep): drop it, do not credit it.
+  if (seconds > SCREEN_TIME_MAX_LEG_SECONDS) return;
   const data = await browser.storage.local.get(SCREEN_TIME_DAY_KEY);
   const byDay = data[SCREEN_TIME_DAY_KEY] || {};
   const day = screenTimeDayKey();
   const bucket = byDay[day] || {};
   bucket[domain] = (bucket[domain] || 0) + seconds;
   byDay[day] = bucket;
+  // The Screen Time page only ever shows today or the current week, so older buckets are dead weight
+  // that every checkpoint would otherwise re-read and re-write forever.
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - SCREEN_TIME_RETENTION_DAYS);
+  const cutoffKey = screenTimeDayKey(cutoff);
+  for (const key of Object.keys(byDay)) {
+    if (key < cutoffKey) delete byDay[key];
+  }
   await browser.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
   // Best-effort -- desktop being unreachable (or simply not paired) must
   // never break local tracking, which is why this isn't awaited by callers.
@@ -724,6 +851,13 @@ const MULTI_TENANT_HOST_SUFFIXES = new Set([
   "tumblr.com",
 ]);
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "com.au", "net.au", "org.au", "edu.au", "gov.au",
+  "co.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "ac.jp", "co.in", "net.in", "org.in", "ac.in",
+  "com.br", "net.br", "org.br", "com.cn", "net.cn", "org.cn", "co.za", "org.za", "com.mx", "com.ar",
+  "com.tr", "co.kr", "or.kr", "com.sg", "com.hk", "com.tw", "co.il", "co.id",
+]);
+
 // Strips to the base two-label domain (e.g. "old.reddit.com" ->
 // "reddit.com") rather than the exact hostname that triggered hard lock,
 // so allowing it via the banner covers every subdomain through
@@ -737,10 +871,24 @@ const MULTI_TENANT_HOST_SUFFIXES = new Set([
 function getBaseDomain(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
+    // IP literals have no registrable domain -- slicing the last two labels
+    // would turn 192.168.1.50 into "1.50", which then matches other networks.
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) return hostname;
     const labels = hostname.split(".");
     if (labels.length <= 2) return hostname;
     const apex = labels.slice(-2).join(".");
-    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || MULTI_TENANT_HOST_SUFFIXES.has(apex)) {
+    // Two-part public suffixes (co.uk, com.au, ...): the "base domain" is the
+    // label in front of them, not the suffix itself -- whitelisting the bare
+    // suffix would allow every site under it.
+    if (MULTI_PART_PUBLIC_SUFFIXES.has(apex)) {
+      return labels.slice(-3).join(".");
+    }
+    // Tenant suffixes can have more than two labels ("s3.amazonaws.com"), so test the host's own tail,
+    // not just the two-label apex.
+    const isTenantHost = Array.from(MULTI_TENANT_HOST_SUFFIXES).some(
+      (suffix) => hostname === suffix || hostname.endsWith("." + suffix)
+    );
+    if (MULTI_SERVICE_APEX_DOMAINS.has(apex) || isTenantHost) {
       return hostname;
     }
     return apex;
@@ -903,6 +1051,10 @@ async function reconcileAlarmWithSession(session) {
   browser.alarms.create(ALARM_NAME, { when: session.endTime });
 }
 
+// Whether the previous sweep saw an enforced (active, not paused, not on
+// break) session -- see the transition check in sweepTabsForCloakOnce().
+let wasEnforcing = false;
+
 async function sweepTabsForCloakOnce() {
   // The extension-side equivalent of carmen-desktop's own
   // sweep_minimize_blocked_windows() -- handleTabUrl's own redirect logic
@@ -916,6 +1068,18 @@ async function sweepTabsForCloakOnce() {
   // below), and reconciling the alarm needs to happen on every tick, not
   // just while hard lock is enforced.
   await reconcileAlarmWithSession(session);
+
+  // handleTabUrl marks a tab's URL as handled even while nothing is enforced
+  // (no session / paused / break), and nothing else re-evaluates the active
+  // tab when a session starts or a break ends on the desktop side -- so the
+  // tab the user is already sitting on stayed exempt until they switched or
+  // navigated. This sweep already polls status regularly, so notice the
+  // not-enforcing -> enforcing transition here and re-check the active tabs.
+  const enforcing = session.isActive && !session.isPaused && !session.isBreak;
+  const justStartedEnforcing = enforcing && !wasEnforcing;
+  wasEnforcing = enforcing;
+  if (justStartedEnforcing) await recheckAllActiveTabs();
+
   if (!session.isActive || session.isPaused || session.isBreak || session.lockMode !== "hard") {
     await cloakedTabsHydrated;
     if (cloakedTabIds.size) await uncloakAllTabs();
@@ -1036,10 +1200,31 @@ async function handleTabUrl(tabId, url) {
   if (whitelisted) {
     lastAcceptableUrl = url;
     switchAwayAttemptsByTab.delete(tabId);
+    // Back on an allowed page: forget the overlay hostname so returning to the
+    // same off-task site shows the overlay again.
+    overlayDomainByTab.delete(tabId);
     uncloakTab(tabId);
+    await openViolationsHydrated;
     const hadOpenViolation = openViolationTabs.delete(tabId);
+    if (hadOpenViolation) persistOpenViolationTabs();
     if (session.source === "browser-only") return;
-    if (!hadOpenViolation) return;
+    let shouldResolve = hadOpenViolation;
+    if (!shouldResolve && openViolationTabs.size > 0) {
+      // The user came back on task by switching to a DIFFERENT, whitelisted
+      // tab while an off-task tab stays open -- the desktop's single open
+      // domain violation must still be resolved, otherwise it stays open
+      // (and keeps accruing off-task time) until that other tab is closed.
+      // The off-task tab re-reports a fresh violation if it's revisited.
+      try {
+        const activeNow = await browser.tabs.get(tabId);
+        if (activeNow.active) {
+          openViolationTabs.clear();
+          persistOpenViolationTabs();
+          shouldResolve = true;
+        }
+      } catch (err) {}
+    }
+    if (!shouldResolve) return;
     try {
       await apiFetch("/violation/resolved", {
         method: "POST",
@@ -1074,9 +1259,20 @@ async function handleTabUrl(tabId, url) {
     return;
   }
   if (!currentTab.active) return;
+  // "Active" is per window -- a second, unfocused window's active tab is not
+  // something the user is looking at, so it must not be reported/enforced
+  // either (it is handled when that window gets focus, see
+  // windows.onFocusChanged). getLastFocused() still answers while the
+  // browser as a whole is in the background.
+  try {
+    const lastFocused = await browser.windows.getLastFocused();
+    if (lastFocused && lastFocused.id !== currentTab.windowId) return;
+  } catch (err) {}
 
+  await openViolationsHydrated;
   if (!openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
+    persistOpenViolationTabs();
     if (session.source === "browser-only") {
       // Unlike recordSessionAddition/resetSessionAdditions, this used to
       // be a plain unlocked read-modify-write -- two tabs violating
@@ -1253,7 +1449,12 @@ async function handleTabUrl(tabId, url) {
           }
         });
       } catch (err) {
-        if (!isDragLockError(err)) throw err;
+        if (!isDragLockError(err)) {
+          // Don't strand the blackout (no way to dismiss it) when the retry
+          // loop ends on a different error than the drag lock that raised it.
+          await clearBlackout();
+          throw err;
+        }
         await forceCloseTab(tabId);
         // Whether or not that actually closed the tab (its own retries can
         // still lose to a drag lock that simply never lets go), don't leave
@@ -1305,6 +1506,16 @@ async function recheckAllActiveTabs() {
   } catch (err) {}
 }
 
+// Every window has its own active tab, but only the focused window's one is
+// being looked at -- screen time must not follow a background window's tab.
+async function isWindowFocused(windowId) {
+  try {
+    return !!(await browser.windows.get(windowId)).focused;
+  } catch (err) {
+    return false;
+  }
+}
+
 browser.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   // The tab just switched away from is now a background tab -- cloak it
   // right away instead of waiting for the next periodic tick.
@@ -1318,7 +1529,9 @@ browser.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
     tabLastActiveAt.set(tabId, Date.now());
 
     const tab = await browser.tabs.get(tabId);
-    await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
+    if (await isWindowFocused(windowId)) {
+      await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
+    }
     lastHandledUrlByTab.delete(tabId);
     await handleTabUrl(tabId, tab.url);
   } catch (err) {}
@@ -1346,7 +1559,11 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // Only the active tab's own navigation should retarget what's being
   // timed -- onUpdated fires for background tabs too, which must not be
   // mistaken for "the user is now looking at this domain".
-  if (tab.active && (changeInfo.url || changeInfo.status === "complete")) {
+  if (
+    tab.active &&
+    (changeInfo.url || changeInfo.status === "complete") &&
+    (await isWindowFocused(tab.windowId))
+  ) {
     await checkpointScreenTime(screenTimeDomainForUrl(tab.url), tabId);
   }
   if (changeInfo.status === "complete" && tab.url) {
@@ -1374,7 +1591,9 @@ browser.tabs.onRemoved.addListener((tabId) => {
   // back to a whitelisted URL does -- otherwise session_manager's
   // _open_violation_index["domain"] stays open forever, since nothing else
   // ever revisits it once the tab is gone.
+  openViolationsHydrated.then(() => {
   if (openViolationTabs.delete(tabId)) {
+    persistOpenViolationTabs();
     getLocalSession()
       .then((local) => {
         if (local.isActive) return;
@@ -1391,6 +1610,7 @@ browser.tabs.onRemoved.addListener((tabId) => {
         );
       });
   }
+  });
 });
 
 browser.windows.onRemoved.addListener((windowId) => {
@@ -1464,6 +1684,13 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
     // _get_status_locked) -- and only treat this as a real end if the
     // desktop confirms it. See DESIGN_DECISIONS.txt, [2026-09-28].
     const session = await getSession();
+    // getSession() reports a failed/timed-out status call as isActive:false
+    // too -- that is not the desktop confirming the session ended. Leave the
+    // session alone and look again shortly instead of POSTing /session/end.
+    if (session.desktopReachable === false) {
+      browser.alarms.create(ALARM_NAME, { when: Date.now() + 30000 });
+      return;
+    }
     await reconcileAlarmWithSession(session);
     if (session.isActive) {
       // Still active from the desktop's point of view -- reconcile above
@@ -1593,6 +1820,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        persistOpenViolationTabs();
         // Not cleared previously -- a tab that stayed parked on the same
         // non-whitelisted domain across two sessions (e.g. the first
         // session ends and a new one starts minutes later without the tab
@@ -1623,6 +1851,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           err
         );
 
+        // The desktop answered but refused (e.g. 401 bad token, 409): it is
+        // reachable, so never fall back to a forked browser-only session.
+        if (err && err.httpStatus) {
+          sendResponse({ ok: false, error: String(err), desktopRejected: true });
+          return;
+        }
+
         if (!browserOnly) {
           sendResponse({ ok: false, error: String(err), desktopUnreachable: true });
           return;
@@ -1642,6 +1877,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        persistOpenViolationTabs();
         // Not cleared previously -- a tab that stayed parked on the same
         // non-whitelisted domain across two sessions (e.g. the first
         // session ends and a new one starts minutes later without the tab
@@ -1679,6 +1915,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       try {
         await apiFetch("/session/end", { method: "POST" });
+        lastDesktopSession = null;
         await notifySessionComplete();
         sendResponse({ ok: true });
       } catch (err) {
@@ -1700,6 +1937,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const wasLocalActive = await withStorageLock(async () => {
         const local = await getLocalSession();
         if (!local.isActive) return false;
+        if (local.isPaused) return true;
         const remainingMs = Math.max(0, local.endTime - Date.now());
         const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
@@ -1729,11 +1967,16 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const resumedEndTime = await withStorageLock(async () => {
         const local = await getLocalSession();
         if (!local.isActive) return null;
+        if (!local.isPaused) return -1;
         const endTime = Date.now() + local.pausedRemainingMs;
         const pauseEvents = [...(local.pauseEvents || []), { kind: "resume", timestamp: Date.now() }];
         await setLocalSession({ ...local, isPaused: false, endTime, pausedRemainingMs: 0, pauseEvents });
         return endTime;
       });
+      if (resumedEndTime === -1) {
+        sendResponse({ ok: true });
+        return;
+      }
       if (resumedEndTime !== null) {
         browser.alarms.create(ALARM_NAME, { when: resumedEndTime });
         lastHandledUrlByTab.clear();
@@ -1836,7 +2079,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.accepted) {
       applyPendingDomainSave();
     } else {
-      browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+      // An explicit "No" on the overlay dismisses both prompt surfaces,
+      // same as the notification's own "No" button does.
+      (async () => {
+        const { [SAVE_DOMAINS_PROMPT_KEY]: pending } = await browser.storage.local.get(SAVE_DOMAINS_PROMPT_KEY);
+        if (pending) browser.notifications.clear(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${pending.taskId}`);
+        await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+      })();
     }
     return false;
   }

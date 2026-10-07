@@ -87,7 +87,23 @@ const parseLines = (value) =>
 // storage.local -- background.js's polling keeps it up to date with
 // whatever the desktop app has, which may have been edited from a
 // different Chrome profile, Edge, or Firefox since this popup last opened.
-const whitelistLoaded = getCachedRules(chrome.storage.local).then(({ domainWhitelist }) => {
+// The cache version the textarea below was loaded from -- saves are pushed
+// against THIS version (not whatever the cache has moved to by the time the
+// user clicks), so the desktop merges a change another device made while the
+// popup was open instead of overwriting it.
+let whitelistBaseVersion;
+async function saveEditedWhitelist(domainWhitelist) {
+  const result = await saveWhitelist({
+    storageApi: chrome.storage.local,
+    domainWhitelist,
+    baseVersion: whitelistBaseVersion,
+  });
+  if (result.synced) whitelistBaseVersion = result.version;
+  return result;
+}
+
+const whitelistLoaded = getCachedRules(chrome.storage.local).then(({ domainWhitelist, version }) => {
+  whitelistBaseVersion = version;
   if (Array.isArray(domainWhitelist) && domainWhitelist.length > 0) {
     whitelistTextarea.value = domainWhitelist.join("\n");
   }
@@ -117,7 +133,7 @@ async function refreshReviewAdditionsButton() {
 
 reviewAdditionsBtn.addEventListener("click", async () => {
   await whitelistLoaded;
-  await saveWhitelist({ storageApi: chrome.storage.local, domainWhitelist: parseLines(whitelistTextarea.value) });
+  await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   chrome.tabs.create({ url: chrome.runtime.getURL("additions/additions.html") });
 });
 
@@ -132,10 +148,7 @@ saveWhitelistBtn.addEventListener("click", async () => {
   await whitelistLoaded;
   saveWhitelistBtn.disabled = true;
   saveWhitelistStatusEl.textContent = "Saving…";
-  const result = await saveWhitelist({
-    storageApi: chrome.storage.local,
-    domainWhitelist: parseLines(whitelistTextarea.value),
-  });
+  const result = await saveEditedWhitelist(parseLines(whitelistTextarea.value));
   if (!result.synced) {
     saveWhitelistStatusEl.textContent = "Saved to this device — will sync once the desktop app is reachable.";
   } else if (result.merged) {
@@ -279,7 +292,10 @@ startBtn.addEventListener("click", async () => {
   // profile/Edge/Firefox instance's next poll picks up this edit too; if
   // the desktop app is unreachable it still saves to this profile's own
   // cache so the edit isn't lost, it just doesn't propagate yet.
-  await saveWhitelist({ storageApi: chrome.storage.local, domainWhitelist });
+  // Disable BEFORE awaiting the (network) whitelist push -- a second click
+  // during that await used to re-enter this handler and start a second session.
+  startBtn.disabled = true;
+  await saveEditedWhitelist(domainWhitelist);
 
   const browserOnly = awaitingBrowserOnlyConfirm;
 
@@ -472,6 +488,8 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+let lastZeroRefreshAt = 0;
+
 function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
   stopCountdown();
   const tick = () => {
@@ -509,7 +527,17 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
         // check decide -- showSetupView() only if the session is genuinely
         // over, otherwise refreshStatus() re-renders the new phase/endTime.
         stopCountdown();
-        refreshStatus();
+        // Throttled: if the desktop keeps reporting this session as active
+        // with no time left (it is still finalizing, or its secondsRemaining
+        // is stale), an unconditional immediate refresh re-renders, restarts
+        // this countdown, hits zero again and refreshes again -- a tight loop
+        // of getStatus round trips (each one a request to the desktop). The 3s
+        // status poll is still running and picks up the real state.
+        const now = Date.now();
+        if (now - lastZeroRefreshAt >= 2000) {
+          lastZeroRefreshAt = now;
+          refreshStatus();
+        }
       }
     }
   };

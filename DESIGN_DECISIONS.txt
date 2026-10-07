@@ -400,3 +400,23 @@ see its DESIGN_DECISIONS.txt [2026-10-04]) renders in the same chip as
 "Review: First attempt"; its Pause button is hidden since the desktop banner
 owns that timer and the pause route has no entry to act on.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-04].
+
+[2026-10-06] War-room fixes: one verified patch per bug, plus a regression check per bug
+Decision: a second ten-agent round (see the referee report) found 59 distinct
+bugs, 43 in chrome/ and firefox/ and 16 in the older carmen-extension-sharing
+copy. One verified patch per bug was applied; 51 applied as written and 8
+collided in isWhitelisted, the save-sites notification code, getBaseDomain,
+the open-violation bookkeeping, the popup's save path and the screen-time
+categorizer, and were merged by hand. Each fix ships with its check script in
+tests/regression/, runnable as `node tests/regression/run-all.mjs` from the
+repo root (exit 0 = every bug stays fixed); the old "no JS test suite" caveat
+in FEATURE_IMPLEMENT.txt no longer holds for these. Interaction fixes: a
+whitelisted-entry normalisation chain (wildcard, query/fragment, port,
+IDN/trailing dot) now lives in one place; the save-sites click falls back to
+the single pending prompt when no per-task entry exists (older stored
+prompts); two test harnesses were taught about shadow DOM and array-key
+storage reads.
+Why: every distinct bug had a reproduced script and a before/after check, so
+keeping those as a regression suite is cheap and stops these coming back.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-05] (the
+desktop's fixes from the first round, same approach).
