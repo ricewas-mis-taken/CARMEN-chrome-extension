@@ -163,6 +163,14 @@ function computeActiveElapsedMs(startedAt, events) {
   return Math.max(0, total);
 }
 
+// Last desktop-reported ACTIVE session, kept in memory so one failed /status
+// call (timeout, 5xx, desktop restarting) does not read as "no session" and
+// silently drop enforcement and uncloak every tab. Only trusted for a short
+// grace window; after that an unreachable desktop falls back to "no session"
+// exactly as before.
+const DESKTOP_SESSION_GRACE_MS = 2 * 60 * 1000;
+let lastDesktopSession = null;
+
 async function getSession() {
   // A browser-only session, once started, must keep being enforced from
   // local state for its whole duration regardless of what the desktop API
@@ -223,7 +231,7 @@ async function getSession() {
     const isPaused = !!data.isPaused;
     const startedAt = toMs(data.startTime);
     const activeElapsedMs = isActive ? computeActiveElapsedMs(startedAt, data.violationLog) : 0;
-    return {
+    const session = {
       isActive,
       isPaused,
       // True during a pomodoro session's break phase (see carmen-desktop's
@@ -261,6 +269,8 @@ async function getSession() {
       reviewInProgress: data.reviewInProgress || null,
       desktopReachable: true,
     };
+    lastDesktopSession = isActive ? { session, at: Date.now() } : null;
+    return session;
   } catch (err) {
     console.warn(
       "CARMEN: could not reach desktop app at",
@@ -268,6 +278,14 @@ async function getSession() {
       "- no browser-only session either.",
       err
     );
+    const held = lastDesktopSession;
+    if (
+      held &&
+      Date.now() - held.at < DESKTOP_SESSION_GRACE_MS &&
+      (held.session.isPaused || held.session.endTime > Date.now())
+    ) {
+      return { ...held.session, lastAcceptableUrl, desktopReachable: false };
+    }
     return { ...defaultSession(), desktopReachable: false };
   }
 }
@@ -1785,6 +1803,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       try {
         await apiFetch("/session/end", { method: "POST" });
+        lastDesktopSession = null;
         await notifySessionComplete();
         sendResponse({ ok: true });
       } catch (err) {
