@@ -563,9 +563,10 @@ async function dropPendingDomainSave(taskId) {
 async function applyPendingDomainSave(taskId) {
   const data = await chrome.storage.local.get([SAVE_DOMAINS_PROMPT_KEY, SAVE_DOMAINS_BY_TASK_KEY]);
   // A notification click names its task; the on-page prompt has no id and means the newest one.
+  const single = data[SAVE_DOMAINS_PROMPT_KEY];
   const pending = taskId !== undefined
-    ? (data[SAVE_DOMAINS_BY_TASK_KEY] || {})[taskId]
-    : data[SAVE_DOMAINS_PROMPT_KEY];
+    ? (data[SAVE_DOMAINS_BY_TASK_KEY] || {})[taskId] || (single && single.taskId === taskId ? single : undefined)
+    : single;
   if (!pending) return;
   try {
     await apiFetch(`/tasks/${encodeURIComponent(pending.taskId)}/domain-whitelist`, {
@@ -596,6 +597,18 @@ const lastHandledUrlByTab = new Map();
 const overlayDomainByTab = new Map();
 const activeTabByWindow = new Map();
 const openViolationTabs = new Set();
+// Persisted (like cloakedTabIds): the MV3 worker/event page can be unloaded at any idle moment, and the
+// desktop's single open violation could otherwise never be resolved by the tab that opened it.
+const OPEN_VIOLATION_TABS_KEY = "openViolationTabIds";
+function persistOpenViolationTabs() {
+  chrome.storage.local.set({ [OPEN_VIOLATION_TABS_KEY]: Array.from(openViolationTabs) }).catch(() => {});
+}
+const openViolationsHydrated = chrome.storage.local
+  .get(OPEN_VIOLATION_TABS_KEY)
+  .then((data) => {
+    for (const id of data[OPEN_VIOLATION_TABS_KEY] || []) openViolationTabs.add(id);
+  })
+  .catch(() => {});
 const switchAwayAttemptsByTab = new Map();
 const MAX_SWITCH_AWAY_ATTEMPTS = 3;
 
@@ -1159,7 +1172,9 @@ async function handleTabUrl(tabId, url) {
     // same off-task site shows the overlay again.
     overlayDomainByTab.delete(tabId);
     uncloakTab(tabId);
+    await openViolationsHydrated;
     const hadOpenViolation = openViolationTabs.delete(tabId);
+    if (hadOpenViolation) persistOpenViolationTabs();
     if (session.source === "browser-only") return;
     let shouldResolve = hadOpenViolation;
     if (!shouldResolve && openViolationTabs.size > 0) {
@@ -1172,6 +1187,7 @@ async function handleTabUrl(tabId, url) {
         const activeNow = await chrome.tabs.get(tabId);
         if (activeNow.active) {
           openViolationTabs.clear();
+          persistOpenViolationTabs();
           shouldResolve = true;
         }
       } catch (err) {}
@@ -1221,8 +1237,10 @@ async function handleTabUrl(tabId, url) {
     if (lastFocused && lastFocused.id !== currentTab.windowId) return;
   } catch (err) {}
 
+  await openViolationsHydrated;
   if (!openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
+    persistOpenViolationTabs();
     if (session.source === "browser-only") {
       // Unlike recordSessionAddition/resetSessionAdditions, this used to
       // be a plain unlocked read-modify-write -- two tabs violating
@@ -1530,7 +1548,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // back to a whitelisted URL does -- otherwise session_manager's
   // _open_violation_index["domain"] stays open forever, since nothing else
   // ever revisits it once the tab is gone.
+  openViolationsHydrated.then(() => {
   if (openViolationTabs.delete(tabId)) {
+    persistOpenViolationTabs();
     getLocalSession()
       .then((local) => {
         if (local.isActive) return;
@@ -1547,6 +1567,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         );
       });
   }
+  });
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
@@ -1756,6 +1777,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        persistOpenViolationTabs();
         // Not cleared previously -- a tab that stayed parked on the same
         // non-whitelisted domain across two sessions (e.g. the first
         // session ends and a new one starts minutes later without the tab
@@ -1805,6 +1827,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        persistOpenViolationTabs();
         // Not cleared previously -- a tab that stayed parked on the same
         // non-whitelisted domain across two sessions (e.g. the first
         // session ends and a new one starts minutes later without the tab
