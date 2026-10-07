@@ -654,6 +654,7 @@ const SCREEN_TIME_CURRENT_KEY = "screenTimeCurrent";
 // event or the periodic alarm woke it) inflating one leg unrealistically.
 const SCREEN_TIME_MAX_LEG_SECONDS = 3600;
 const SCREEN_TIME_ALARM_NAME = "screenTimeCheckpoint";
+const SCREEN_TIME_RETENTION_DAYS = 35;
 
 function screenTimeDayKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -678,6 +679,14 @@ async function addScreenTimeSecondsLocked(domain, seconds) {
   const bucket = byDay[day] || {};
   bucket[domain] = (bucket[domain] || 0) + seconds;
   byDay[day] = bucket;
+  // The Screen Time page only ever shows today or the current week, so older buckets are dead weight
+  // that every checkpoint would otherwise re-read and re-write forever.
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - SCREEN_TIME_RETENTION_DAYS);
+  const cutoffKey = screenTimeDayKey(cutoff);
+  for (const key of Object.keys(byDay)) {
+    if (key < cutoffKey) delete byDay[key];
+  }
   await browser.storage.local.set({ [SCREEN_TIME_DAY_KEY]: byDay });
   // Best-effort -- desktop being unreachable (or simply not paired) must
   // never break local tracking, which is why this isn't awaited by callers.
