@@ -652,7 +652,7 @@ const SCREEN_TIME_CURRENT_KEY = "screenTimeCurrent";
 // Caps a single checkpoint's elapsed time -- guards against a stale
 // startedAt (the worker was suspended for a long time before the next
 // event or the periodic alarm woke it) inflating one leg unrealistically.
-const SCREEN_TIME_MAX_LEG_SECONDS = 3600;
+const SCREEN_TIME_MAX_LEG_SECONDS = 300;
 const SCREEN_TIME_ALARM_NAME = "screenTimeCheckpoint";
 const SCREEN_TIME_RETENTION_DAYS = 35;
 
@@ -672,7 +672,8 @@ function screenTimeDomainForUrl(url) {
 // itself (withStorageLock's single queue isn't reentrant).
 async function addScreenTimeSecondsLocked(domain, seconds) {
   if (!domain || seconds <= 0) return;
-  seconds = Math.min(seconds, SCREEN_TIME_MAX_LEG_SECONDS);
+  // Every live leg is re-checkpointed each minute, so one this old is stale (browser closed, machine asleep): drop it, do not credit it.
+  if (seconds > SCREEN_TIME_MAX_LEG_SECONDS) return;
   const data = await browser.storage.local.get(SCREEN_TIME_DAY_KEY);
   const byDay = data[SCREEN_TIME_DAY_KEY] || {};
   const day = screenTimeDayKey();
