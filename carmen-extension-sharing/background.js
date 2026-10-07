@@ -313,10 +313,18 @@ async function handleTabUrl(tabId, url) {
             await chrome.windows.update(currentTab.windowId, { state: "minimized" });
           }
         } else {
-          const fallback = buildFallbackUrl(session.domainWhitelist);
-          if (!fallback) return;
+          // Never open a whitelisted URL here: if that entry redirects off the
+          // whitelist the new tab is itself a violation and this runs again,
+          // forever (the main build fixed this; see its HOMEPAGE_URL notes).
+          // The browser's own new-tab page cannot be a violation. Reuse one
+          // already open from a previous redirect instead of piling them up.
+          const homepage = tabs.find((t) => t.id !== tabId && t.url === "chrome://newtab/");
+          if (homepage) {
+            await chrome.tabs.update(homepage.id, { active: true });
+            return;
+          }
           await chrome.tabs.create({
-            url: fallback,
+            url: "chrome://newtab/",
             active: true,
             windowId: currentTab.windowId,
           });
