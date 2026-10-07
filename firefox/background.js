@@ -70,7 +70,9 @@ async function apiFetch(path, options) {
     if (!res.ok) {
       throw new Error(`Desktop API ${path} responded with ${res.status}`);
     }
-    return res.json();
+    // await, not a bare return: otherwise the finally below clears the abort timer
+    // the moment json() is *created*, leaving the body read unbounded.
+    return await res.json();
   } finally {
     clearTimeout(timeoutId);
   }
