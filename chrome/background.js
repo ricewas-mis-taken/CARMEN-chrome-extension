@@ -1328,7 +1328,12 @@ async function handleTabUrl(tabId, url) {
           }
         });
       } catch (err) {
-        if (!isDragLockError(err)) throw err;
+        if (!isDragLockError(err)) {
+          // Don't strand the blackout (no way to dismiss it) when the retry
+          // loop ends on a different error than the drag lock that raised it.
+          await clearBlackout();
+          throw err;
+        }
         await forceCloseTab(tabId);
         // Whether or not that actually closed the tab (its own retries can
         // still lose to a drag lock that simply never lets go), don't leave
