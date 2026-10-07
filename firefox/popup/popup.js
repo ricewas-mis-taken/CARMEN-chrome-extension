@@ -278,6 +278,9 @@ startBtn.addEventListener("click", async () => {
   // profile/Edge/Firefox instance's next poll picks up this edit too; if
   // the desktop app is unreachable it still saves to this profile's own
   // cache so the edit isn't lost, it just doesn't propagate yet.
+  // Disable BEFORE awaiting the (network) whitelist push -- a second click
+  // during that await used to re-enter this handler and start a second session.
+  startBtn.disabled = true;
   await saveWhitelist({ storageApi: browser.storage.local, domainWhitelist });
 
   const browserOnly = awaitingBrowserOnlyConfirm;
