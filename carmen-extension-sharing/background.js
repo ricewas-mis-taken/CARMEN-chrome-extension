@@ -128,12 +128,11 @@ async function forceCloseTab(tabId) {
   try {
     await withDragRetry(() => removeTabVerified(tabId));
   } catch (err) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      await withDragRetry(() => removeWindowVerified(tab.windowId));
-    } catch (cleanupErr) {
-      console.error("CARMEN: could not force-close a stranded drag tab/window.", cleanupErr);
-    }
+    // Never escalate to closing the whole window: that also closes every
+    // unrelated tab in it, and holding the mouse on the tab strip is enough
+    // to trigger the drag-lock error. Give up on this one tab; the next
+    // navigation/activation event re-runs the same enforcement check.
+    console.error("CARMEN: could not force-close a stranded drag tab; leaving it for now.", err);
   }
 }
 
