@@ -500,6 +500,9 @@ async function notifySessionComplete() {
 }
 
 const SAVE_DOMAINS_PROMPT_KEY = "pendingDomainSavePrompt";
+// One entry per task: each persistent notification must apply the sites of the task it was shown for,
+// not whichever prompt happens to be newest in the single slot above.
+const SAVE_DOMAINS_BY_TASK_KEY = "pendingDomainSavePromptsByTask";
 const SAVE_DOMAINS_NOTIFICATION_PREFIX = "carmenSaveDomains:";
 
 // Offers to save sites allowed mid-session (via the "Allow this site?"
@@ -523,8 +526,11 @@ async function maybeOfferToSaveDomains(entry) {
 
   const taskId = entry.eventId;
   const taskTitle = entry.eventTitle || "this task";
+  const byTaskData = await browser.storage.local.get(SAVE_DOMAINS_BY_TASK_KEY);
+  const byTask = { ...(byTaskData[SAVE_DOMAINS_BY_TASK_KEY] || {}), [taskId]: { taskId, taskTitle, domains } };
   await browser.storage.local.set({
     [SAVE_DOMAINS_PROMPT_KEY]: { taskId, taskTitle, domains },
+    [SAVE_DOMAINS_BY_TASK_KEY]: byTask,
   });
 
   // Firefox's notifications API has no `buttons` or `requireInteraction`
@@ -571,8 +577,22 @@ async function maybeOfferToSaveDomains(entry) {
 // pushing it to the desktop app, then clears it either way -- accepted or
 // not, a stale pending entry must never get applied later by an unrelated
 // future click.
-async function applyPendingDomainSave() {
-  const { [SAVE_DOMAINS_PROMPT_KEY]: pending } = await browser.storage.local.get(SAVE_DOMAINS_PROMPT_KEY);
+async function dropPendingDomainSave(taskId) {
+  const data = await browser.storage.local.get([SAVE_DOMAINS_PROMPT_KEY, SAVE_DOMAINS_BY_TASK_KEY]);
+  const byTask = { ...(data[SAVE_DOMAINS_BY_TASK_KEY] || {}) };
+  delete byTask[taskId];
+  await browser.storage.local.set({ [SAVE_DOMAINS_BY_TASK_KEY]: byTask });
+  if (data[SAVE_DOMAINS_PROMPT_KEY] && data[SAVE_DOMAINS_PROMPT_KEY].taskId === taskId) {
+    await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+  }
+}
+
+async function applyPendingDomainSave(taskId) {
+  const data = await browser.storage.local.get([SAVE_DOMAINS_PROMPT_KEY, SAVE_DOMAINS_BY_TASK_KEY]);
+  // A notification click names its task; the on-page prompt has no id and means the newest one.
+  const pending = taskId !== undefined
+    ? (data[SAVE_DOMAINS_BY_TASK_KEY] || {})[taskId]
+    : data[SAVE_DOMAINS_PROMPT_KEY];
   if (!pending) return;
   try {
     await apiFetch(`/tasks/${encodeURIComponent(pending.taskId)}/domain-whitelist`, {
@@ -583,7 +603,7 @@ async function applyPendingDomainSave() {
   } catch (err) {
     console.warn("CARMEN: could not save allowed sites to the task.", err);
   } finally {
-    await browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    await dropPendingDomainSave(pending.taskId);
     browser.notifications.clear(`${SAVE_DOMAINS_NOTIFICATION_PREFIX}${pending.taskId}`);
   }
 }
@@ -593,10 +613,11 @@ async function applyPendingDomainSave() {
 browser.notifications.onButtonClicked?.addListener((notificationId, buttonIndex) => {
   if (!notificationId.startsWith(SAVE_DOMAINS_NOTIFICATION_PREFIX)) return;
   browser.notifications.clear(notificationId);
+  const clickedTaskId = notificationId.slice(SAVE_DOMAINS_NOTIFICATION_PREFIX.length);
   if (buttonIndex === 0) {
-    applyPendingDomainSave();
+    applyPendingDomainSave(clickedTaskId);
   } else {
-    browser.storage.local.remove(SAVE_DOMAINS_PROMPT_KEY);
+    dropPendingDomainSave(clickedTaskId);
   }
 });
 
