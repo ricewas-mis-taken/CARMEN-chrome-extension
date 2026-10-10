@@ -1778,6 +1778,9 @@ if (browser.tabGroups) {
 // the poll keeps working on its own.
 const WAKE_WAIT_SECONDS = 20;
 const WAKE_RETRY_MS = [2000, 5000, 15000, 30000];
+const WAKE_MIN_GAP_MS = 2000;
+const WAKE_IDLE_PAUSE_MS = 5000;
+const WAKE_CHANGED_PAUSE_MS = 300;
 let wakeVersion = null;
 let wakeLoopRunning = false;
 
@@ -1789,6 +1792,8 @@ async function wakeLoop() {
     while (true) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), (WAKE_WAIT_SECONDS + 5) * 1000);
+      timer?.unref?.();
+      const askedAt = Date.now();
       try {
         const since = wakeVersion === null ? "" : `since=${wakeVersion}&`;
         const res = await fetch(`${API_BASE}/events/wait?${since}timeout=${WAKE_WAIT_SECONDS}`, {
@@ -1801,6 +1806,15 @@ async function wakeLoop() {
         const baseline = wakeVersion === null;
         wakeVersion = body.version;
         if (body.changed && !baseline) sweepTabsForCloak();
+        // An answer that came back at once (the desktop is at its waiter limit,
+        // or something is misbehaving) must not turn into a tight loop of
+        // requests -- pause before asking again.
+        if (!baseline && Date.now() - askedAt < WAKE_MIN_GAP_MS) {
+          await new Promise((resolve) => {
+            const pause = setTimeout(resolve, body.changed ? WAKE_CHANGED_PAUSE_MS : WAKE_IDLE_PAUSE_MS);
+            pause?.unref?.();
+          });
+        }
       } catch (err) {
         failures++;
         await new Promise((resolve) => {
