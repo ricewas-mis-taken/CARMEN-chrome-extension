@@ -2034,6 +2034,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "switchToWaitingSession" || message?.type === "endWaitingSession") {
+    (async () => {
+      // A paused session waiting behind the running one (desktop's
+      // parkedSessions): bring it to the front (the running one takes its
+      // place, paused) or end it without touching the running one.
+      const parkId = message.parkId;
+      if (typeof parkId !== "string" || !parkId) {
+        sendResponse({ ok: false, error: "missing parkId" });
+        return;
+      }
+      const switching = message.type === "switchToWaitingSession";
+      try {
+        const data = await apiFetch(switching ? "/session/parked/switch" : "/session/parked/end", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ parkId }),
+        });
+        if (switching) {
+          // A different session is running now, with its own clock and rules.
+          if (typeof data.secondsRemaining === "number") {
+            chrome.alarms.create(ALARM_NAME, { when: Date.now() + data.secondsRemaining * 1000 });
+          }
+          lastHandledUrlByTab.clear();
+          await recheckAllActiveTabs();
+        }
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.warn("CARMEN: could not reach desktop app to change a waiting session.", err);
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === "addWhitelistDomain") {
     (async () => {
       const { domain, reason } = message.payload || {};
