@@ -35,6 +35,7 @@ function defaultSession() {
     reviewProblemName: null,
     reviewSubjectName: null,
     reviewInProgress: null,
+    parkedSessions: [],
   };
 }
 
@@ -224,6 +225,7 @@ async function getSession() {
       reviewProblemName: null,
       reviewSubjectName: null,
       reviewInProgress: null,
+      parkedSessions: [],
       desktopReachable: false,
     };
   }
@@ -270,6 +272,9 @@ async function getSession() {
       // never existed at all (see carmen-desktop's
       // review_store.get_active_review()).
       reviewInProgress: data.reviewInProgress || null,
+      // Paused sessions waiting behind this one (desktop only; the
+      // popup lists them, nothing here enforces them).
+      parkedSessions: Array.isArray(data.parkedSessions) ? data.parkedSessions : [],
       desktopReachable: true,
     };
     lastDesktopSession = isActive ? { session, at: Date.now() } : null;
