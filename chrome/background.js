@@ -1476,6 +1476,7 @@ async function recheckAllActiveTabs() {
     const activeTabs = await chrome.tabs.query({ active: true });
     for (const t of activeTabs) {
       lastHandledUrlByTab.delete(t.id);
+      overlayDomainByTab.delete(t.id);
       await handleTabUrl(t.id, t.url);
     }
   } catch (err) {}
