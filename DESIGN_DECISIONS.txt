@@ -420,3 +420,15 @@ Why: every distinct bug had a reproduced script and a before/after check, so
 keeping those as a regression suite is cheap and stops these coming back.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-05] (the
 desktop's fixes from the first round, same approach).
+
+[2026-10-09] The extension keeps a long request open to the desktop to react instantly
+Decision: background.js runs wakeLoop(): one request at a time to the
+desktop's GET /events/wait?since=<version>&timeout=20. A "changed" answer runs
+sweepTabsForCloak() right away (which re-checks the active tab when enforcement
+starts). The 7s poll stays as the backstop; failures back off 2/5/15/30s and
+never throw. Restarted by the 1-minute alarm if the worker was put to sleep.
+Why: a session started on the desktop while the user sat on a distracting tab
+waited up to 7s to be noticed. Wake-up is only a hint, so correctness never
+depends on it.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-09] (the
+/events/wait endpoint and change counter).

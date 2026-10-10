@@ -1650,6 +1650,7 @@ function notifyLocalSessionComplete(session) {
 }
 
 browser.alarms.onAlarm.addListener(async (alarm) => {
+  wakeLoop();
   if (alarm.name === SCREEN_TIME_ALARM_NAME) {
     // Re-checkpoints to itself: flushes the elapsed time on whatever's
     // currently being timed and immediately restarts the clock on the same
@@ -1767,6 +1768,69 @@ if (browser.tabGroups) {
   browser.tabGroups.onUpdated.addListener(() => sweepTabsForCloak());
   browser.tabGroups.onCreated.addListener(() => sweepTabsForCloak());
 }
+
+// Instant wake-up from the desktop app. The 7s poll above is the backstop; this
+// just keeps one long request open to GET /events/wait, which the desktop
+// answers the moment a session/review changes (start, end, pause, resume, a
+// pomodoro phase flip). On "changed" we run the same sweep the poll would,
+// right now, instead of up to POLL_INTERVAL_MS later. Never required for
+// correctness: if the desktop is down or the request fails we back off and
+// the poll keeps working on its own.
+const WAKE_WAIT_SECONDS = 20;
+const WAKE_RETRY_MS = [2000, 5000, 15000, 30000];
+const WAKE_MIN_GAP_MS = 2000;
+const WAKE_IDLE_PAUSE_MS = 5000;
+const WAKE_CHANGED_PAUSE_MS = 300;
+let wakeVersion = null;
+let wakeLoopRunning = false;
+
+async function wakeLoop() {
+  if (wakeLoopRunning) return;
+  wakeLoopRunning = true;
+  let failures = 0;
+  try {
+    while (true) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), (WAKE_WAIT_SECONDS + 5) * 1000);
+      timer?.unref?.();
+      const askedAt = Date.now();
+      try {
+        const since = wakeVersion === null ? "" : `since=${wakeVersion}&`;
+        const res = await fetch(`${API_BASE}/events/wait?${since}timeout=${WAKE_WAIT_SECONDS}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`events/wait responded with ${res.status}`);
+        const body = await res.json();
+        if (typeof body.version !== "number") throw new Error("events/wait gave no version");
+        failures = 0;
+        const baseline = wakeVersion === null;
+        wakeVersion = body.version;
+        if (body.changed && !baseline) sweepTabsForCloak();
+        // An answer that came back at once (the desktop is at its waiter limit,
+        // or something is misbehaving) must not turn into a tight loop of
+        // requests -- pause before asking again.
+        if (!baseline && Date.now() - askedAt < WAKE_MIN_GAP_MS) {
+          await new Promise((resolve) => {
+            const pause = setTimeout(resolve, body.changed ? WAKE_CHANGED_PAUSE_MS : WAKE_IDLE_PAUSE_MS);
+            pause?.unref?.();
+          });
+        }
+      } catch (err) {
+        failures++;
+        await new Promise((resolve) => {
+          const retry = setTimeout(resolve, WAKE_RETRY_MS[Math.min(failures, WAKE_RETRY_MS.length) - 1]);
+          // Browsers return a number here (no-op); under Node the unref lets the regression checks exit.
+          retry?.unref?.();
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  } finally {
+    wakeLoopRunning = false;
+  }
+}
+wakeLoop();
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
