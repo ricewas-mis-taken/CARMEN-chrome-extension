@@ -31,13 +31,21 @@ function makeEl() {
     children: [], textContent: "", className: "", classes,
     classList: { toggle: (c, f) => { (f === undefined ? !classes.has(c) : f) ? classes.add(c) : classes.delete(c); }, contains: (c) => classes.has(c) },
     appendChild(c) { this.children.push(c); return c; },
+    handlers: {}, disabled: false,
+    addEventListener(type, fn) { this.handlers[type] = fn; },
+    click() { return this.handlers.click?.(); },
     set innerHTML(v) { this.children = []; }, get innerHTML() { return ""; },
   };
 }
 
-function runWaiting(file, session) {
+function runWaiting(file, session, sent = [], answer = { ok: true }) {
   const { code } = popupFns(file);
-  const sandbox = { Date, Math, Array, document: { createElement: makeEl }, waitingSessionsEl: makeEl(), waitingListEl: makeEl() };
+  const sandbox = {
+    Date, Math, Array, document: { createElement: makeEl }, waitingSessionsEl: makeEl(), waitingListEl: makeEl(),
+    sendWaitingMessage: async (m) => { sent.push(m); return answer; },
+    refreshStatus: () => { sent.push("refresh"); },
+    setTimeout, clearTimeout,
+  };
   vm.createContext(sandbox);
   vm.runInContext(code + "\nrenderWaitingSessions(SESSION);", Object.assign(sandbox, { SESSION: session }));
   return sandbox;
@@ -76,6 +84,54 @@ if (scenario === "popup") {
       if (!box.waitingSessionsEl.classes.has("hidden")) fail(`${file}: waiting section should be hidden when nothing waits`);
     }
   }
+} else if (scenario === "buttons") {
+  const waiting = [{ parkId: "p-a", eventTitle: "A", secondsRemaining: 60 }, { parkId: "p-b", eventTitle: "B", secondsRemaining: 90 }];
+  for (const file of ["chrome/popup/popup.js", "firefox/popup/popup.js"]) {
+    const sent = [];
+    const box = runWaiting(file, { isActive: true, parkedSessions: waiting }, sent);
+    const [rowA, rowB] = box.waitingListEl.children;
+    const actions = (row) => row.children[2].children;
+    if (actions(rowA).map((b) => b.textContent).join() !== "Switch,End") fail(`${file}: row buttons are ${actions(rowA).map((b) => b.textContent)}`);
+    await actions(rowB)[0].click();
+    if (JSON.stringify(sent) !== JSON.stringify([{ type: "switchToWaitingSession", parkId: "p-b" }, "refresh"])) fail(`${file}: Switch sent ${JSON.stringify(sent)}`);
+    sent.length = 0;
+    const endBtn = actions(rowA)[1];
+    await endBtn.click();
+    if (sent.length) fail(`${file}: End acted on the first click: ${JSON.stringify(sent)}`);
+    if (endBtn.textContent !== "Sure?") fail(`${file}: End did not ask for confirmation, shows ${endBtn.textContent}`);
+    await endBtn.click();
+    if (JSON.stringify(sent) !== JSON.stringify([{ type: "endWaitingSession", parkId: "p-a" }, "refresh"])) fail(`${file}: End sent ${JSON.stringify(sent)}`);
+    // an unreachable desktop is shown on the button, never silently ignored
+    const failed = [];
+    const box2 = runWaiting(file, { isActive: true, parkedSessions: waiting }, failed, { ok: false });
+    const sw = box2.waitingListEl.children[0].children[2].children[0];
+    await sw.click();
+    if (sw.textContent !== "Unreachable" || failed.includes("refresh")) fail(`${file}: a failed Switch should say so, shows ${sw.textContent}`);
+  }
+} else if (scenario === "background-actions") {
+  const seen = [];
+  const b = await load({ fetchImpl: async (url, opts = {}) => {
+    const u = new URL(url);
+    if (u.pathname === "/events/wait") return new Promise(() => {});
+    if (u.pathname.startsWith("/session/parked/")) {
+      seen.push({ path: u.pathname, method: opts.method, body: opts.body });
+      return ok({ secondsRemaining: 120, isActive: true });
+    }
+    return ok({ isActive: false });
+  } });
+  const sw = await b.msg({ type: "switchToWaitingSession", parkId: "p-1" });
+  const en = await b.msg({ type: "endWaitingSession", parkId: "p-2" });
+  const bad = await b.msg({ type: "switchToWaitingSession" });
+  if (!sw?.ok || !en?.ok) fail(`handlers did not report success: ${JSON.stringify([sw, en])}`);
+  if (bad?.ok) fail("a request without a parkId must be refused");
+  if (JSON.stringify(seen.map((r) => [r.path, r.method, JSON.parse(r.body)])) !== JSON.stringify([
+    ["/session/parked/switch", "POST", { parkId: "p-1" }], ["/session/parked/end", "POST", { parkId: "p-2" }],
+  ])) fail(`wrong desktop calls: ${JSON.stringify(seen)}`);
+  const endAlarm = b.calls.alarms.find((a) => a[0] === "create" && a[1] === "focusSessionEnd");
+  if (!endAlarm || Math.abs(endAlarm[2].when - (Date.now() + 120000)) > 15000) fail("after switching, the session-end alarm was not re-armed for the new running session");
+  const down = await load({ fetchImpl: async () => { throw new Error("down"); } });
+  const dr = await down.msg({ type: "endWaitingSession", parkId: "x" });
+  if (dr?.ok !== false) fail("an unreachable desktop must answer ok:false");
 } else if (scenario === "background") {
   const waiting = [{ parkId: "a", eventTitle: "A", secondsRemaining: 5 }, { parkId: "b", eventTitle: "B", secondsRemaining: 6 }];
   const b = await load({ fetchImpl: async (url) => {
@@ -90,7 +146,7 @@ if (scenario === "popup") {
   const r2 = await none.msg({ type: "getStatus" });
   if (!Array.isArray(r2?.session?.parkedSessions) || r2.session.parkedSessions.length) fail("an older desktop without parkedSessions should read as an empty list");
 } else {
-  for (const s of ["popup", "popup-none", "background"]) {
+  for (const s of ["popup", "popup-none", "buttons", "background-actions", "background"]) {
     const r = spawnSync(process.execPath, [new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "."], {
       env: { ...process.env, WAITING_SCENARIO: s }, encoding: "utf8", timeout: 30000, cwd: process.cwd(),
     });
