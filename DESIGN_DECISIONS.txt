@@ -432,3 +432,16 @@ waited up to 7s to be noticed. Wake-up is only a hint, so correctness never
 depends on it.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-09] (the
 /events/wait endpoint and change counter).
+
+[2026-10-10] Popup lists the desktop's waiting (paused) sessions, read-only
+Decision: GET /status now carries parkedSessions (paused sessions set aside
+while a different one runs, next-to-return first, any number). background.js
+passes the list through on every path (empty for an older desktop or browser-only
+mode) and the popup shows a "Waiting (paused)" box with one row per session:
+name, then time left (timed) / worked time (reviews, burnout) / pomodoro cycle.
+Why: a task paused while another runs used to vanish from the extension
+entirely. It is display-only because only the desktop can bring one back and
+nothing about a waiting session is enforced.
+Rejected alternative: Switch/End buttons in the popup -- needs new token-gated
+desktop routes and a way to say which of many; not asked for.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-10] (waiting sessions).
