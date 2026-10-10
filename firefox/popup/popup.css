@@ -746,3 +746,28 @@ textarea#whitelist:focus {
   color: #7a8794;
   font-variant-numeric: tabular-nums;
 }
+
+.waiting-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.waiting-btn {
+  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid #c9d3d6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #3b4650;
+  cursor: pointer;
+}
+
+.waiting-btn:hover:not(:disabled) {
+  background: #eef2f4;
+}
+
+.waiting-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

@@ -737,9 +737,11 @@ function renderReviewProgressBanner(session) {
   reviewProgressPauseBtn.textContent = review.isPaused ? "Resume" : "Pause";
 }
 
+const sendWaitingMessage = sendMessageSafe;
+
 // Paused sessions waiting behind the running one (carmen-desktop's
-// parkedSessions). Read-only: they enforce nothing and only the desktop can
-// bring one back, so this just shows what is waiting.
+// parkedSessions). They enforce nothing; each row can bring its session back
+// to the front (Switch) or end it.
 function pausedWorkedMs(startTime, log) {
   if (!startTime) return 0;
   let total = 0;
@@ -772,6 +774,42 @@ function waitingSessionDetail(parked) {
   return text;
 }
 
+function waitingButton(label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "waiting-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", () => onClick(btn));
+  return btn;
+}
+
+async function runWaitingAction(btn, label, type, parkId) {
+  btn.disabled = true;
+  const response = await sendWaitingMessage({ type, parkId });
+  btn.disabled = false;
+  if (response?.ok) {
+    refreshStatus();
+    return;
+  }
+  btn.textContent = "Unreachable";
+  setTimeout(() => { btn.textContent = label; }, 2500);
+}
+
+// Ending files the session into history for good, so it takes a second click.
+function waitingEndButton(parkId) {
+  let armedTimer = null;
+  return waitingButton("End", (btn) => {
+    if (armedTimer === null) {
+      btn.textContent = "Sure?";
+      armedTimer = setTimeout(() => { armedTimer = null; btn.textContent = "End"; }, 3000);
+      return undefined;
+    }
+    clearTimeout(armedTimer);
+    armedTimer = null;
+    return runWaitingAction(btn, "End", "endWaitingSession", parkId);
+  });
+}
+
 function renderWaitingSessions(session) {
   const waiting = Array.isArray(session?.parkedSessions) ? session.parkedSessions : [];
   waitingSessionsEl.classList.toggle("hidden", waiting.length === 0);
@@ -784,8 +822,13 @@ function renderWaitingSessions(session) {
     const detail = document.createElement("span");
     detail.className = "waiting-detail";
     detail.textContent = waitingSessionDetail(parked);
+    const actions = document.createElement("span");
+    actions.className = "waiting-actions";
+    actions.appendChild(waitingButton("Switch", (btn) => runWaitingAction(btn, "Switch", "switchToWaitingSession", parked.parkId)));
+    actions.appendChild(waitingEndButton(parked.parkId));
     item.appendChild(name);
     item.appendChild(detail);
+    item.appendChild(actions);
     waitingListEl.appendChild(item);
   }
 }
