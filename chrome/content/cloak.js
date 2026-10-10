@@ -103,6 +103,18 @@
     if (cover) cover.remove();
   }
 
+  // When the extension is reloaded or updated, scripts it already put into open
+  // pages keep running but can no longer hear from it -- so a cloak applied before
+  // the reload would stay on that tab for good (blue cover, "CARMEN HIDDEN"),
+  // re-added every tick, with nothing able to lift it. Such an orphan lifts itself.
+  function extensionIsAlive() {
+    try {
+      return !!(chrome.runtime && chrome.runtime.id);
+    } catch (err) {
+      return false;
+    }
+  }
+
   function cloak() {
     if (!cloaked) {
       originalTitle = document.title;
@@ -119,6 +131,10 @@
     // meaningful stretch.
     if (reassertTimer) clearInterval(reassertTimer);
     reassertTimer = setInterval(() => {
+      if (!extensionIsAlive()) {
+        uncloak();
+        return;
+      }
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
       applyCloakFavicon();
       applyCover();

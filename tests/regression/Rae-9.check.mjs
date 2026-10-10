@@ -21,7 +21,7 @@ for (const b of ["chrome", "firefox"]) {
     getElementById: (id) => els[id] || null,
   };
   let onMsg;
-  const chrome = { runtime: { onMessage: { addListener: (f) => { onMsg = f; } } } };
+  const chrome = { runtime: { id: "ext-id", onMessage: { addListener: (f) => { onMsg = f; } } } };
   const window = {};
   const sandbox = { document, chrome, window, location: { origin: "https://mail.example.com" }, MutationObserver: class { observe() {} disconnect() {} }, setInterval: (f) => { intervals.push(f); return intervals.length; }, clearInterval() {} };
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
