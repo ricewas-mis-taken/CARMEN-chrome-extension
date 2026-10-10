@@ -1114,6 +1114,9 @@ async function sweepTabsForCloakOnce() {
 
 const CLOAK_TASK_TIMEOUT_MS = 4000;
 
+// How long the cover gets to actually paint before the offending tab is left.
+const CLOAK_PAINT_WAIT_MS = 150;
+
 function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
 }
@@ -1396,6 +1399,13 @@ async function handleTabUrl(tabId, url) {
       try {
         await withDragRetry(async () => {
           try {
+            // Cover the page BEFORE leaving it. The browser's hover card shows
+            // the last frame the tab painted while it was visible, and a tab
+            // that is already in the background never repaints -- so a cover
+            // added only after switching away left the real page visible in
+            // that preview. Idempotent, so retries are harmless.
+            await cloakOffendingTab(tabId);
+            await new Promise((resolve) => setTimeout(resolve, CLOAK_PAINT_WAIT_MS));
             await switchAway();
             consecutiveFailures = 0;
             switchAwayAttemptsByTab.set(tabId, (switchAwayAttemptsByTab.get(tabId) || 0) + 1);
