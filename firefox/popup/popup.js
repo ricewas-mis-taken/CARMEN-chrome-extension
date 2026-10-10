@@ -20,6 +20,8 @@ const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");
 
 const reviewProgressBannerEl = document.getElementById("review-progress-banner");
+const waitingSessionsEl = document.getElementById("waiting-sessions");
+const waitingListEl = document.getElementById("waiting-list");
 const reviewProgressRowEl = document.getElementById("review-progress-row");
 const reviewProgressTitleEl = document.getElementById("review-progress-title");
 const reviewProgressElapsedEl = document.getElementById("review-progress-elapsed");
@@ -735,6 +737,59 @@ function renderReviewProgressBanner(session) {
   reviewProgressPauseBtn.textContent = review.isPaused ? "Resume" : "Pause";
 }
 
+// Paused sessions waiting behind the running one (carmen-desktop's
+// parkedSessions). Read-only: they enforce nothing and only the desktop can
+// bring one back, so this just shows what is waiting.
+function pausedWorkedMs(startTime, log) {
+  if (!startTime) return 0;
+  let total = 0;
+  let runStart = Date.parse(startTime);
+  for (const entry of log || []) {
+    const at = Date.parse(entry.timestamp);
+    if (entry.kind === "pause" && runStart !== null) {
+      total += at - runStart;
+      runStart = null;
+    } else if (entry.kind === "resume" && runStart === null) {
+      runStart = at;
+    }
+  }
+  return runStart === null ? total : total + (Date.now() - runStart);
+}
+
+function waitingSessionLabel(parked) {
+  if (parked.reviewProblemName) return `Review: ${parked.reviewProblemName}`;
+  return parked.eventTitle || "Focus session";
+}
+
+function waitingSessionDetail(parked) {
+  const stopwatch = parked.isBurnout || parked.reviewProblemName;
+  let text = stopwatch
+    ? `${formatElapsed(pausedWorkedMs(parked.startTime, parked.violationLog))} elapsed`
+    : `${formatElapsed((parked.secondsRemaining || 0) * 1000)} left`;
+  if (parked.pomodoro) {
+    text += ` \u00b7 ${parked.isBreak ? "break" : "focus"} ${parked.pomodoro.currentCycle}/${parked.pomodoro.totalCycles}`;
+  }
+  return text;
+}
+
+function renderWaitingSessions(session) {
+  const waiting = Array.isArray(session?.parkedSessions) ? session.parkedSessions : [];
+  waitingSessionsEl.classList.toggle("hidden", waiting.length === 0);
+  waitingListEl.innerHTML = "";
+  for (const parked of waiting) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "waiting-name";
+    name.textContent = waitingSessionLabel(parked);
+    const detail = document.createElement("span");
+    detail.className = "waiting-detail";
+    detail.textContent = waitingSessionDetail(parked);
+    item.appendChild(name);
+    item.appendChild(detail);
+    waitingListEl.appendChild(item);
+  }
+}
+
 async function refreshStatus() {
   const response = await sendMessageSafe({ type: "getStatus" });
   const session = response?.session;
@@ -743,6 +798,7 @@ async function refreshStatus() {
   // a review can be running (and keep running) whether or not any other
   // session is active, so it must never be hidden just because the main
   // session view happens to be the setup screen right now.
+  renderWaitingSessions(session);
   renderReviewProgressBanner(session);
   // Polling must stay armed for reviewInProgress alone too -- otherwise a
   // review started with no other session active never gets a second
