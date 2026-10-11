@@ -454,4 +454,5 @@ soft/hard lock and the cloaking follow the shared session with no extension
 change. Not covered: browser-only sessions (started in the extension with no
 desktop) stay on that browser. The saved default domain list now syncs too, and
 a change to it bumps focusRulesVersion so the extension refetches its rules.
-Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-11] (two computers act as one).
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-11] (two computers act as one;
+the same day's live-connection entry there changes nothing for the extension).
