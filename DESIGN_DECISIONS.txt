@@ -445,3 +445,13 @@ nothing about a waiting session is enforced.
 Rejected alternative: Switch/End buttons in the popup -- needs new token-gated
 desktop routes and a way to say which of many; not asked for.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-10] (waiting sessions).
+
+2026-10-11 -- Cross-computer session sync (extension side: no change needed)
+The extension only ever reads its own desktop app's /status, and the desktop now
+adopts the session another computer started (see carmen-desktop
+DESIGN_DECISIONS.txt [2026-10-11]). So on the second computer the popup, the
+soft/hard lock and the cloaking follow the shared session with no extension
+change. Not covered: browser-only sessions (started in the extension with no
+desktop) stay on that browser. The saved default domain list now syncs too, and
+a change to it bumps focusRulesVersion so the extension refetches its rules.
+Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-11] (two computers act as one).
