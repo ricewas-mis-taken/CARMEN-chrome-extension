@@ -169,9 +169,15 @@
     removeCover();
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "cloakTab") {
       cloak();
+      if (message.waitForPaint) {
+        // Reply only once the cover has really been painted: two animation
+        // frames. (A tab in the background never paints, so the caller caps the wait.)
+        requestAnimationFrame(() => requestAnimationFrame(() => sendResponse({ painted: true })));
+        return true;
+      }
     } else if (message?.type === "uncloakTab") {
       uncloak();
     }
