@@ -45,6 +45,7 @@ const browserOnlyRowEl = document.getElementById("browser-only-row");
 const reviewInfoEl = document.getElementById("review-info");
 const reviewInfoTaskEl = document.getElementById("review-info-task");
 const reviewInfoNameEl = document.getElementById("review-info-name");
+const reviewInfoNameLabelEl = document.getElementById("review-info-name-label");
 const reviewInfoSubjectLineEl = document.getElementById("review-info-subject-line");
 const reviewInfoSubjectEl = document.getElementById("review-info-subject");
 
@@ -600,7 +601,9 @@ function renderActiveSession(session) {
   reviewInfoEl.classList.toggle("hidden", !isReviewSourced);
   if (isReviewSourced) {
     reviewInfoTaskEl.textContent = session.eventTitle || "—";
-    reviewInfoNameEl.textContent = session.reviewProblemName || "—";
+    // Timing the first go at a new problem: nothing to "review" yet.
+    reviewInfoNameLabelEl.textContent = session.isFirstAttempt ? "Timing" : "Review";
+    reviewInfoNameEl.textContent = session.isFirstAttempt ? "First attempt" : session.reviewProblemName || "—";
     const hasSubject = !!session.reviewSubjectName;
     reviewInfoSubjectLineEl.classList.toggle("hidden", !hasSubject);
     reviewInfoSubjectEl.textContent = session.reviewSubjectName || "";
@@ -708,7 +711,7 @@ function renderReviewProgressBanner(session) {
   reviewProgressBannerEl.classList.toggle("hidden", !review);
   if (!review) return;
 
-  reviewProgressTitleEl.textContent = `Review: ${review.problemName}`;
+  reviewProgressTitleEl.textContent = review.isFirstAttempt ? "First attempt" : `Review: ${review.problemName}`;
   reviewProgressElapsedEl.textContent = formatElapsed((review.elapsedSeconds || 0) * 1000);
   reviewProgressSubjectEl.textContent = review.subjectName || "—";
   // Colors the chip after the problem's own category color (subjectColor,
@@ -754,7 +757,11 @@ function pausedWorkedMs(startTime, log) {
 }
 
 function waitingSessionLabel(parked) {
-  if (parked.reviewProblemName) return `Review: ${parked.reviewProblemName}`;
+  if (parked.reviewProblemName) {
+    const firstAttempt =
+      typeof parked.isFirstAttempt === "boolean" ? parked.isFirstAttempt : parked.reviewProblemName === "First attempt";
+    return firstAttempt ? "First attempt" : `Review: ${parked.reviewProblemName}`;
+  }
   return parked.eventTitle || "Focus session";
 }
 
