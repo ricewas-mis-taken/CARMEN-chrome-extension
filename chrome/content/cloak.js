@@ -84,7 +84,7 @@
   // Hover cards and vertical-tab previews are a screenshot of the page itself
   // -- swapping the title/favicon never touches those. An opaque, topmost
   // full-viewport cover on <html> (not <body>, which SPAs and pages replace
-  // wholesale) makes that screenshot a blank rectangle instead. The browser's
+  // wholesale) makes that screenshot a solid "CARMEN LOCKED" card instead. The browser's
   // own hover card still shows the domain; that part isn't page content.
   const COVER_ID = "__carmen_cloak_cover";
 
@@ -92,9 +92,16 @@
     if (document.getElementById(COVER_ID)) return;
     const cover = document.createElement("div");
     cover.id = COVER_ID;
+    // CARMEN LOCKED in huge letters across the whole page: the two words wrap onto
+    // two lines and fill the viewport, so even the tiny hover thumbnail reads it.
+    cover.textContent = "CARMEN LOCKED";
     cover.style.cssText =
-      "position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;" +
-      "background:#5B8DEF;pointer-events:auto;margin:0;padding:0;border:0;";
+      "position:fixed;inset:0;z-index:2147483647;" +
+      "background:#5B8DEF;pointer-events:auto;margin:0;border:0;overflow:hidden;" +
+      "box-sizing:border-box;padding:3vmin;display:flex;align-items:center;justify-content:center;" +
+      "text-align:center;color:#fff;font-weight:900;font-size:min(20vw,38vh);line-height:0.95;" +
+      "letter-spacing:-0.02em;word-break:keep-all;" +
+      "font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif;";
     document.documentElement.appendChild(cover);
   }
 
