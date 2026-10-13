@@ -944,7 +944,7 @@ const cloakedTabsHydrated = browser.storage.local
   })
   .catch(() => {});
 
-async function cloakOffendingTab(tabId) {
+async function cloakOffendingTab(tabId, { waitForPaint = false } = {}) {
   // Hard lock never touches the offending tab's own URL (see switchAway()
   // below) -- only injecting content/cloak.js actually hides what it's
   // sitting on from the tab strip itself (title + favicon), which a
@@ -953,11 +953,21 @@ async function cloakOffendingTab(tabId) {
     // Already-injected tabs (the common case on every re-sweep) answer
     // immediately; only a fresh document (new tab, navigation, reload) has
     // no listener yet and falls through to the inject-then-message path.
+    // waitForPaint: the page answers only once the browser has painted the
+    // cover (two animation frames), so leaving the tab right after cannot freeze
+    // its hover preview on the real page -- a heavy page (Desmos) can take far
+    // longer than any fixed wait to produce that frame. A tab nobody is looking
+    // at never paints, so this is only asked of the tab being left, and capped.
+    const cloakMessage = { type: "cloakTab", waitForPaint };
+    const send = () => {
+      const sent = browser.tabs.sendMessage(tabId, cloakMessage);
+      return waitForPaint ? withTimeout(sent, CLOAK_PAINT_TIMEOUT_MS) : sent;
+    };
     try {
-      await browser.tabs.sendMessage(tabId, { type: "cloakTab" });
+      await send();
     } catch (noListener) {
       await browser.scripting.executeScript({ target: { tabId }, files: ["content/cloak.js"] });
-      await browser.tabs.sendMessage(tabId, { type: "cloakTab" });
+      await send();
     }
     cloakedTabIds.add(tabId);
     persistCloakedTabs();
@@ -1151,8 +1161,8 @@ async function sweepTabsForCloakOnce() {
 
 const CLOAK_TASK_TIMEOUT_MS = 4000;
 
-// How long the cover gets to actually paint before the offending tab is left.
-const CLOAK_PAINT_WAIT_MS = 150;
+// The longest the offending tab is held for its cover to paint before leaving it.
+const CLOAK_PAINT_TIMEOUT_MS = 700;
 
 function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
@@ -1452,8 +1462,7 @@ async function handleTabUrl(tabId, url) {
             // that is already in the background never repaints -- so a cover
             // added only after switching away left the real page visible in
             // that preview. Idempotent, so retries are harmless.
-            await cloakOffendingTab(tabId);
-            await new Promise((resolve) => setTimeout(resolve, CLOAK_PAINT_WAIT_MS));
+            await cloakOffendingTab(tabId, { waitForPaint: true });
             await switchAway();
             consecutiveFailures = 0;
             switchAwayAttemptsByTab.set(tabId, (switchAwayAttemptsByTab.get(tabId) || 0) + 1);
