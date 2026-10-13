@@ -33,6 +33,7 @@ function defaultSession() {
     eventId: null,
     eventTitle: null,
     reviewProblemName: null,
+    isFirstAttempt: false,
     reviewSubjectName: null,
     reviewInProgress: null,
     parkedSessions: [],
@@ -223,6 +224,7 @@ async function getSession() {
       eventId: null,
       eventTitle: null,
       reviewProblemName: null,
+      isFirstAttempt: false,
       reviewSubjectName: null,
       reviewInProgress: null,
       parkedSessions: [],
@@ -266,6 +268,12 @@ async function getSession() {
       eventId: data.eventId || null,
       eventTitle: data.eventTitle || null,
       reviewProblemName: data.reviewProblemName || null,
+      // A first attempt is never a "review": the desktop says so; an older desktop
+      // is recognised by the name it files the timer under.
+      isFirstAttempt:
+        typeof data.isFirstAttempt === "boolean"
+          ? data.isFirstAttempt
+          : data.source === "review" && data.reviewProblemName === "First attempt",
       reviewSubjectName: data.reviewSubjectName || null,
       // Independent of isActive above -- a review can be running (and stay
       // running) while a completely different session is active, ends, or

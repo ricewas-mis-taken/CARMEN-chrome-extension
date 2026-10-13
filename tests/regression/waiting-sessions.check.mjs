@@ -51,11 +51,15 @@ if (scenario === "popup") {
   waiting[1] = { ...waiting[1], reviewProblemName: "Two Sum", startTime: new Date(Date.now() - 600000).toISOString(),
     violationLog: [{ kind: "pause", timestamp: new Date(Date.now() - 300000).toISOString() }] };
   waiting[2] = { ...waiting[2], pomodoro: { currentCycle: 2, totalCycles: 4 }, isBreak: false };
+  waiting[3] = { ...waiting[3], reviewProblemName: "First attempt", isFirstAttempt: true };
+  waiting[4] = { ...waiting[4], reviewProblemName: "First attempt" };            // an older desktop: no flag
   for (const file of ["chrome/popup/popup.js", "firefox/popup/popup.js"]) {
     const box = runWaiting(file, { isActive: true, parkedSessions: waiting });
     if (box.waitingSessionsEl.classes.has("hidden")) fail(`${file}: waiting section hidden although sessions are waiting`);
     if (box.waitingListEl.children.length !== 100) fail(`${file}: expected 100 rows, got ${box.waitingListEl.children.length}`);
     const rows = box.waitingListEl.children.map((li) => li.children.map((c) => c.textContent));
+    if (rows[3]?.[0] !== "First attempt") fail(`${file}: first attempt must not say Review: ${rows[3]}`);
+    if (rows[4]?.[0] !== "First attempt") fail(`${file}: older desktop first attempt: ${rows[4]}`);
     if (rows[0]?.[0] !== "Task 0") fail(`${file}: first row name: ${rows[0]}`);
     if (rows[0]?.[1] !== "10:00 left") fail(`${file}: first row detail should be remaining time: ${rows[0]}`);
     if (rows[1]?.[0] !== "Review: Two Sum") fail(`${file}: review row name: ${rows[1]}`);
@@ -86,6 +90,21 @@ if (scenario === "popup") {
   } });
   const r = await b.msg({ type: "getStatus" });
   if (JSON.stringify(r?.session?.parkedSessions) !== JSON.stringify(waiting)) fail(`background dropped parkedSessions: ${JSON.stringify(r?.session?.parkedSessions)}`);
+  for (const [label, data, expected] of [
+    ["flag from the desktop", { source: "review", reviewProblemName: "First attempt", isFirstAttempt: true }, true],
+    ["a real problem called First attempt", { source: "review", reviewProblemName: "First attempt", isFirstAttempt: false }, false],
+    ["an older desktop", { source: "review", reviewProblemName: "First attempt" }, true],
+    ["an ordinary review", { source: "review", reviewProblemName: "Two Sum" }, false],
+  ]) {
+    const fa = await load({ fetchImpl: async (url) => {
+      const u = new URL(url);
+      if (u.pathname === "/status") return ok({ isActive: true, endTime: Date.now() + 60000, domainWhitelist: [], ...data });
+      if (u.pathname === "/events/wait") return new Promise(() => {});
+      return ok({});
+    } });
+    const got = (await fa.msg({ type: "getStatus" }))?.session?.isFirstAttempt;
+    if (got !== expected) fail(`isFirstAttempt for ${label}: expected ${expected}, got ${got}`);
+  }
   const none = await load({ fetchImpl: async (url) => (new URL(url).pathname === "/events/wait" ? new Promise(() => {}) : ok({ isActive: true, endTime: Date.now() + 60000, domainWhitelist: [] })) });
   const r2 = await none.msg({ type: "getStatus" });
   if (!Array.isArray(r2?.session?.parkedSessions) || r2.session.parkedSessions.length) fail("an older desktop without parkedSessions should read as an empty list");
