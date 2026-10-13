@@ -122,6 +122,19 @@
     }
   }
 
+  // The page asks the extension whether the lock still applies, so a lost "uncloak"
+  // message can never leave it covered (see "cloakStillWanted" in background.js).
+  const ASK_EVERY_TICKS = 5;
+  let ticks = 0;
+  function askIfStillWanted() {
+    try {
+      chrome.runtime.sendMessage({ type: "cloakStillWanted" }, (reply) => {
+        void chrome.runtime.lastError;
+        if (reply && reply.wanted === false) uncloak();
+      });
+    } catch (err) {}
+  }
+
   function cloak() {
     if (!cloaked) {
       originalTitle = document.title;
@@ -137,11 +150,14 @@
     // 500ms is fast enough that the real title is never visible for a
     // meaningful stretch.
     if (reassertTimer) clearInterval(reassertTimer);
+    ticks = 0;
     reassertTimer = setInterval(() => {
       if (!extensionIsAlive()) {
         uncloak();
         return;
       }
+      if (++ticks % ASK_EVERY_TICKS === 0) askIfStillWanted();
+      if (!cloaked) return;
       if (document.title !== CLOAK_TITLE) document.title = CLOAK_TITLE;
       applyCloakFavicon();
       applyCover();

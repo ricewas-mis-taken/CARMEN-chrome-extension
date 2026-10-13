@@ -1826,6 +1826,25 @@ async function wakeLoop() {
 wakeLoop();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "cloakStillWanted") {
+    // A cloaked page asks, every second or so, whether it should still be cloaked.
+    // The uncloak message can be lost (service worker restarted, tab frozen, the id
+    // forgotten), which left the cover and "CARMEN HIDDEN" on until the user clicked
+    // in and reloaded; this makes the page lift it itself. Errors answer "wanted" so
+    // a hiccup never exposes a blocked page.
+    (async () => {
+      try {
+        const session = await getSession();
+        const url = sender?.tab?.url;
+        const enforcing =
+          session.isActive && !session.isPaused && !session.isBreak && session.lockMode === "hard";
+        sendResponse({ wanted: !(!enforcing || (url && isWhitelisted(url, session.domainWhitelist))) });
+      } catch (err) {
+        sendResponse({ wanted: true });
+      }
+    })();
+    return true;
+  }
   if (message?.type === "startSession") {
     (async () => {
       // message.payload is missing/malformed (e.g. sendMessage({type:

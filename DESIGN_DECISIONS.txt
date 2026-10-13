@@ -456,3 +456,7 @@ desktop) stay on that browser. The saved default domain list now syncs too, and
 a change to it bumps focusRulesVersion so the extension refetches its rules.
 Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-11] (two computers act as one;
 the same day's live-connection entry there changes nothing for the extension).
+
+[2026-10-12] Cloak lifts itself (pull, not only push)
+  Fork: keep relying on the background pushing an "uncloak" message, or have the cloaked page ask.
+  Chose both: the page asks "cloakStillWanted" about once a second. Pushed messages can be lost (worker restart, frozen tab, forgotten id), which left CARMEN HIDDEN on until the user reloaded. Errors answer "wanted" so a hiccup never exposes a blocked page.
