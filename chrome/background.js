@@ -1000,10 +1000,11 @@ async function reconcileAlarmWithSession(session) {
   if (session.source === "browser-only") return;
 
   if (!session.isActive || session.isPaused) {
-    if (lastArmedAlarmEndTime !== 0) {
-      lastArmedAlarmEndTime = 0;
-      await chrome.alarms.clear(ALARM_NAME);
-    }
+    // Cleared unconditionally: lastArmedAlarmEndTime is in-memory and
+    // resets to 0 when the worker restarts, but the alarm itself survives --
+    // guarding on it left a stale alarm that fired after the session ended.
+    lastArmedAlarmEndTime = 0;
+    await chrome.alarms.clear(ALARM_NAME);
     return;
   }
 
@@ -1034,10 +1035,11 @@ async function reconcileAlarmWithSession(session) {
     // regardless of whether an alarm is armed. This must NOT itself decide
     // the session is over -- only getSession() confirming isActive: false
     // is allowed to do that (see DESIGN_DECISIONS.txt, [2026-09-28]).
-    if (lastArmedAlarmEndTime !== 0) {
-      lastArmedAlarmEndTime = 0;
-      await chrome.alarms.clear(ALARM_NAME);
-    }
+    // Cleared unconditionally: lastArmedAlarmEndTime is in-memory and
+    // resets to 0 when the worker restarts, but the alarm itself survives --
+    // guarding on it left a stale alarm that fired after the session ended.
+    lastArmedAlarmEndTime = 0;
+    await chrome.alarms.clear(ALARM_NAME);
     return;
   }
 
