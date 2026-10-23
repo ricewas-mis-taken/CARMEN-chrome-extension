@@ -1323,7 +1323,9 @@ async function handleTabUrl(tabId, url) {
       // one blank tab per redirect instead of just reusing the one already
       // open. Not filtered by collapsed-group the way isCandidate is --
       // it's always our own tab, never one the user grouped themselves.
-      const isExistingHomepageTab = (t) => t.id !== tabId && t.url === HOMEPAGE_URL;
+      // Edge reports the page it opens for "chrome://newtab/" as "edge://newtab/", so an exact
+      // match missed it there and every redirect opened one more blank tab.
+      const isExistingHomepageTab = (t) => t.id !== tabId && /^(chrome|edge):\/\/newtab\/?$/i.test(t.url || "");
 
       // mostRecentlyActiveTab, not .find() -- .find() picked whichever
       // matching tab happened to come first in chrome.tabs.query({})'s
