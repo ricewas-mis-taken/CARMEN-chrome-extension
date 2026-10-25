@@ -2,18 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>CARMEN — Log</title>
+    <title>Carmen · Violation log</title>
+    <link rel="stylesheet" href="../theme.css" />
     <link rel="stylesheet" href="log.css" />
   </head>
   <body>
     <div id="app">
       <header class="header">
-        <div class="logo-dot"></div>
-        <h1>CARMEN — Violation Log</h1>
+        <div class="logo-dot" aria-hidden="true"></div>
+        <h1>Violation log</h1>
       </header>
 
       <section id="current-section" class="hidden">
-        <h2>Current session</h2>
+        <h2>This session</h2>
         <p class="summary" id="current-summary"></p>
         <table class="log-table">
           <thead>
@@ -30,7 +31,7 @@
       </section>
 
       <section id="history-section">
-        <h2>Past sessions</h2>
+        <h2>Earlier sessions</h2>
         <div id="history-container"></div>
       </section>
     </div>
