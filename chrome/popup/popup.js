@@ -34,6 +34,7 @@ const pomodoroChipRowEl = document.getElementById("pomodoro-chip-row");
 const pomodoroChipTimeEl = document.getElementById("pomodoro-chip-time");
 const pomodoroChipDetailEl = document.getElementById("pomodoro-chip-detail");
 const pomodoroCycleTextEl = document.getElementById("pomodoro-cycle-text");
+const pomodoroResumeBtn = document.getElementById("pomodoro-resume-btn");
 const pauseBtn = document.getElementById("pause-btn");
 const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
@@ -361,11 +362,26 @@ reviewProgressPauseBtn.addEventListener("click", () => {
   );
 });
 
+pomodoroResumeBtn.addEventListener("click", () => {
+  pomodoroResumeBtn.disabled = true;
+  chrome.runtime.sendMessage({ type: "pauseReview" }, (response) => {
+    pomodoroResumeBtn.disabled = false;
+    if (response?.ok) {
+      refreshStatus();
+    } else {
+      pomodoroResumeBtn.textContent = "Desktop app unreachable — try again";
+      setTimeout(() => {
+        pomodoroResumeBtn.textContent = "Resume pomodoro";
+      }, 2500);
+    }
+  });
+});
+
 pauseBtn.addEventListener("click", () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   pauseBtn.disabled = true;
   chrome.runtime.sendMessage(
-    { type: willPause ? "pauseSession" : "resumeSession" },
+    { type: pauseTargetsReview ? "pauseReview" : willPause ? "pauseSession" : "resumeSession" },
     (response) => {
       pauseBtn.disabled = false;
       if (response?.ok) {
@@ -469,6 +485,9 @@ addSiteSubmitBtn.addEventListener("click", () => {
 });
 
 function showSetupView() {
+  countdownEndTime = null;
+  reviewClock = null;
+  pauseTargetsReview = false;
   activeView.classList.add("hidden");
   setupView.classList.remove("hidden");
   resetAddSiteForm();
@@ -507,9 +526,50 @@ function updateRuler(elapsedMs, remainingMs, show) {
 
 let lastZeroRefreshAt = 0;
 
-function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
+// /status reports whole seconds, so two polls of the same running timer
+// disagree by up to a second. Re-basing the display on every poll made the time
+// jump back and forth between two values; a new reading is only adopted when it
+// is further off than this from what this popup is already counting.
+const REBASE_TOLERANCE_MS = 1500;
+let countdownEndTime = null;
+let reviewClock = null; // { elapsedMs, at } of the review shown as the big time
+let pauseTargetsReview = false;
+
+function steadyEndTime(endTime) {
+  if (countdownEndTime !== null && Math.abs(endTime - countdownEndTime) < REBASE_TOLERANCE_MS) {
+    return countdownEndTime;
+  }
+  return endTime;
+}
+
+function steadyReviewClock(previous, elapsedMs) {
+  const now = Date.now();
+  if (previous && Math.abs(elapsedMs - (previous.elapsedMs + (now - previous.at))) < REBASE_TOLERANCE_MS) {
+    return previous;
+  }
+  return { elapsedMs, at: now };
+}
+
+// While a review runs it is the big time (see reviewTakesOver); the pomodoro
+// it rides on shrinks to its chip, which keeps showing the phase's time left.
+function reviewTakesOver(session) {
+  const review = session?.reviewInProgress;
+  return !!(
+    session?.isActive &&
+    !session.isPaused &&
+    session.source !== "review" &&
+    review &&
+    !review.isPaused &&
+    !review.isFirstAttempt
+  );
+}
+
+function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline, review) {
   stopCountdown();
+  countdownEndTime = hasNoRealDeadline ? null : endTime;
+  reviewClock = review || null;
   const tick = () => {
+    const now = Date.now();
     // Burnout sessions, and a review driving its own session (source ===
     // "review" -- see renderActiveSession), both carry an artificial
     // endTime ceiling that isn't a real deadline -- counting up from start
@@ -517,50 +577,46 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
     // type (manual, task, pomodoro, calendar-event) has a real deadline,
     // so it counts DOWN to it instead -- counting up there would show the
     // wrong thing entirely, not just a cosmetic mismatch.
-    if (hasNoRealDeadline) {
-      const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
+    if (review) {
+      countdownEl.textContent = formatElapsed(review.elapsedMs + (now - review.at));
+      updateRuler(0, 0, false);
+    } else if (hasNoRealDeadline) {
+      const elapsed = baseActiveElapsedMs + (now - baseTimestamp);
       countdownEl.textContent = formatElapsed(elapsed);
       updateRuler(0, 0, false);
-    } else {
-      const msRemaining = Math.max(0, endTime - Date.now());
+    }
+    if (hasNoRealDeadline) return;
+    const msRemaining = Math.max(0, endTime - now);
+    if (!review) {
       countdownEl.textContent = formatElapsed(msRemaining);
-      updateRuler(
-        baseActiveElapsedMs + (Date.now() - baseTimestamp),
-        msRemaining,
-        pomodoroInfoEl.classList.contains("hidden"),
-      );
-      // Mirrors the same countdown into the pomodoro chip (see
-      // renderActiveSession) whenever it's showing -- endTime during a
-      // pomodoro is already the current phase's own deadline (see
-      // carmen-desktop's session_manager._advance_pomodoro_locked), so this
-      // is the literal time-left-in-this-phase value, not a separate one.
-      if (!pomodoroInfoEl.classList.contains("hidden")) {
-        pomodoroChipTimeEl.textContent = formatElapsed(msRemaining);
-      }
-      if (msRemaining <= 0) {
-        // Don't assume the session is over just because the LOCAL countdown
-        // hit zero -- during a pomodoro, endTime is only the current
-        // phase's own deadline (see renderActiveSession), so every phase
-        // boundary (focus -> break, break -> next focus) hits this exact
-        // branch well before the next scheduled status poll confirms the
-        // desktop already rolled to the next phase. Immediately calling
-        // showSetupView() here used to flash the popup to "no session
-        // running" for a few seconds at every single phase change. Trigger
-        // an immediate status refresh instead and let ITS own isActive
-        // check decide -- showSetupView() only if the session is genuinely
-        // over, otherwise refreshStatus() re-renders the new phase/endTime.
-        stopCountdown();
-        // Throttled: if the desktop keeps reporting this session as active
-        // with no time left (it is still finalizing, or its secondsRemaining
-        // is stale), an unconditional immediate refresh re-renders, restarts
-        // this countdown, hits zero again and refreshes again -- a tight loop
-        // of getStatus round trips (each one a request to the desktop). The 3s
-        // status poll is still running and picks up the real state.
-        const now = Date.now();
-        if (now - lastZeroRefreshAt >= 2000) {
-          lastZeroRefreshAt = now;
-          refreshStatus();
-        }
+      updateRuler(baseActiveElapsedMs + (now - baseTimestamp), msRemaining, pomodoroInfoEl.classList.contains("hidden"));
+    }
+    // Mirrors the phase's time left into the pomodoro chip whenever it's
+    // showing -- endTime during a pomodoro is already the current phase's own
+    // deadline (see carmen-desktop's session_manager._advance_pomodoro_locked),
+    // so this is the literal time-left-in-this-phase value, not a separate one.
+    if (!pomodoroInfoEl.classList.contains("hidden")) {
+      pomodoroChipTimeEl.textContent = formatElapsed(msRemaining);
+    }
+    if (msRemaining <= 0) {
+      // Don't assume the session is over just because the LOCAL countdown
+      // hit zero -- during a pomodoro, endTime is only the current
+      // phase's own deadline, so every phase boundary hits this exact branch
+      // well before the next scheduled status poll confirms the desktop
+      // already rolled to the next phase. Immediately calling showSetupView()
+      // here used to flash the popup to "no session running" for a few
+      // seconds at every single phase change. Trigger an immediate status
+      // refresh instead and let ITS own isActive check decide.
+      stopCountdown();
+      // Throttled: if the desktop keeps reporting this session as active
+      // with no time left (it is still finalizing, or its secondsRemaining
+      // is stale), an unconditional immediate refresh re-renders, restarts
+      // this countdown, hits zero again and refreshes again -- a tight loop
+      // of getStatus round trips. The 3s status poll still picks up the real
+      // state.
+      if (now - lastZeroRefreshAt >= 2000) {
+        lastZeroRefreshAt = now;
+        refreshStatus();
       }
     }
   };
@@ -593,6 +649,8 @@ function renderActiveSession(session) {
   violationsCountEl.textContent = `${violationCount} violation${violationCount === 1 ? "" : "s"}`;
   violationsCountEl.classList.toggle("has-violations", violationCount > 0);
 
+  const reviewMain = reviewTakesOver(session);
+  pauseTargetsReview = reviewMain;
   pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
   pauseBtn.classList.toggle("is-paused", !!session.isPaused);
   pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
@@ -608,18 +666,30 @@ function renderActiveSession(session) {
     // to the cycle count on click.
     pomodoroCycleTextEl.textContent = `${pomodoro.currentCycle} of ${pomodoro.totalCycles}`;
   }
+  // Only offered while a review holds the big time: it hands it back.
+  pomodoroResumeBtn.classList.toggle("hidden", !(pomodoro && reviewMain));
 
   const isTaskSourced = session.source === "task";
   const isReviewSourced = session.source === "review";
-  const isEventSourced = (session.source === "calendar-event" || isTaskSourced) && !isReviewSourced;
+  const isEventSourced = (session.source === "calendar-event" || isTaskSourced) && !isReviewSourced && !reviewMain;
   eventSourceRowEl.classList.toggle("hidden", !isEventSourced);
   eventSourceIconEl.textContent = isTaskSourced ? "🔁" : "📅";
   eventSourceTitleEl.textContent = isEventSourced
     ? session.eventTitle || (isTaskSourced ? "Task" : "Calendar event")
     : "";
 
-  reviewInfoEl.classList.toggle("hidden", !isReviewSourced);
-  if (isReviewSourced) {
+  reviewInfoEl.classList.toggle("hidden", !(isReviewSourced || reviewMain));
+  if (reviewMain) {
+    // The review rides on this session's own task, so the task line, allowed
+    // sites and violations above and below are already the review's.
+    const review = session.reviewInProgress;
+    reviewInfoTaskEl.textContent = session.eventTitle || "—";
+    reviewInfoNameLabelEl.textContent = "Review";
+    reviewInfoNameEl.textContent = review.problemName || "—";
+    const hasSubject = !!review.subjectName;
+    reviewInfoSubjectLineEl.classList.toggle("hidden", !hasSubject);
+    reviewInfoSubjectEl.textContent = review.subjectName || "";
+  } else if (isReviewSourced) {
     reviewInfoTaskEl.textContent = session.eventTitle || "—";
     // Timing the first go at a new problem: nothing to "review" yet.
     reviewInfoNameLabelEl.textContent = session.isFirstAttempt ? "Timing" : "Review";
@@ -639,11 +709,13 @@ function renderActiveSession(session) {
   // must count up for the same reason -- counting DOWN from ~8 hours reads
   // as a real, very long timer instead of what it actually is.
   const hasNoRealDeadline = session.isBurnout || session.source === "review";
-  countdownLabelEl.textContent = hasNoRealDeadline ? "Time elapsed" : "Time left";
+  countdownLabelEl.textContent = reviewMain ? "Review time" : hasNoRealDeadline ? "Time elapsed" : "Time left";
 
   const activeElapsedMs = session.activeElapsedMs || 0;
   if (session.isPaused) {
     stopCountdown();
+    countdownEndTime = null;
+    reviewClock = null;
     const pausedText = hasNoRealDeadline
       ? formatElapsed(activeElapsedMs)
       : formatElapsed(Math.max(0, session.endTime - Date.now()));
@@ -653,7 +725,10 @@ function renderActiveSession(session) {
       pomodoroChipTimeEl.textContent = pausedText;
     }
   } else {
-    startCountdown(session.endTime, activeElapsedMs, Date.now(), hasNoRealDeadline);
+    const clock = reviewMain
+      ? steadyReviewClock(reviewClock, (session.reviewInProgress.elapsedSeconds || 0) * 1000)
+      : null;
+    startCountdown(steadyEndTime(session.endTime), activeElapsedMs, Date.now(), hasNoRealDeadline, clock);
   }
 }
 
@@ -726,14 +801,42 @@ function placeReviewProgressBanner(underPomodoro) {
   reviewProgressBannerEl.classList.toggle("review-chip-compact", underPomodoro);
 }
 
+// The chip's own elapsed time ticks locally between polls (same steady clock
+// as the big time), so it doesn't sit still and then jump every 3 seconds.
+let reviewChipClock = null;
+let reviewChipInterval = null;
+
+function stopReviewChipTicker() {
+  if (reviewChipInterval) {
+    clearInterval(reviewChipInterval);
+    reviewChipInterval = null;
+  }
+  reviewChipClock = null;
+}
+
 function renderReviewProgressBanner(session) {
   const review = session?.reviewInProgress;
   placeReviewProgressBanner(!!session?.isActive);
-  reviewProgressBannerEl.classList.toggle("hidden", !review);
-  if (!review) return;
+  reviewProgressBannerEl.classList.toggle("hidden", !review || reviewTakesOver(session));
+  if (!review) {
+    stopReviewChipTicker();
+    return;
+  }
 
   reviewProgressTitleEl.textContent = review.isFirstAttempt ? "First attempt" : `Review: ${review.problemName}`;
-  reviewProgressElapsedEl.textContent = formatElapsed((review.elapsedSeconds || 0) * 1000);
+  if (review.isPaused || reviewTakesOver(session)) {
+    stopReviewChipTicker();
+    reviewProgressElapsedEl.textContent = formatElapsed((review.elapsedSeconds || 0) * 1000);
+  } else {
+    reviewChipClock = steadyReviewClock(reviewChipClock, (review.elapsedSeconds || 0) * 1000);
+    const showChipTime = () => {
+      if (reviewChipClock) {
+        reviewProgressElapsedEl.textContent = formatElapsed(reviewChipClock.elapsedMs + (Date.now() - reviewChipClock.at));
+      }
+    };
+    showChipTime();
+    if (!reviewChipInterval) reviewChipInterval = setInterval(showChipTime, 1000);
+  }
   reviewProgressSubjectEl.textContent = review.subjectName || "—";
   // Colors the chip after the problem's own category color (subjectColor,
   // e.g. "#4A90D9" -- same color already used for it elsewhere, like the

@@ -838,3 +838,8 @@ textarea#whitelist {
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
+
+.pomodoro-resume-btn {
+  width: 100%;
+  margin-top: 8px;
+}
