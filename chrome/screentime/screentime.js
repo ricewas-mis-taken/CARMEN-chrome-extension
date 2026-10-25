@@ -38,7 +38,7 @@ async function loadDomainCategories() {
 
 const CATEGORIES = ["Entertainment", "Education", "Games", "Tools", "Other"];
 const CATEGORY_COLORS = {
-  Entertainment: "#E27D60", Education: "#4A90D9", Games: "#8E44AD", Tools: "#2E8B57", Other: "#9AA0A8",
+  Entertainment: "var(--cat-entertainment)", Education: "var(--cat-education)", Games: "var(--cat-games)", Tools: "var(--cat-tools)", Other: "var(--cat-other)",
 };
 const GROUP_THRESHOLD_SECONDS = 5 * 60;
 
