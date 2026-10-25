@@ -364,7 +364,7 @@ reviewProgressPauseBtn.addEventListener("click", () => {
 
 pomodoroResumeBtn.addEventListener("click", () => {
   pomodoroResumeBtn.disabled = true;
-  chrome.runtime.sendMessage({ type: "pauseReview" }, (response) => {
+  const finish = (response) => {
     pomodoroResumeBtn.disabled = false;
     if (response?.ok) {
       refreshStatus();
@@ -373,6 +373,13 @@ pomodoroResumeBtn.addEventListener("click", () => {
       setTimeout(() => {
         pomodoroResumeBtn.textContent = "Resume pomodoro";
       }, 2500);
+    }
+  };
+  chrome.runtime.sendMessage({ type: "pauseReview" }, (response) => {
+    if (response?.ok && sessionPausedNow) {
+      chrome.runtime.sendMessage({ type: "resumeSession" }, finish);
+    } else {
+      finish(response);
     }
   });
 });
@@ -534,6 +541,13 @@ const REBASE_TOLERANCE_MS = 1500;
 let countdownEndTime = null;
 let reviewClock = null; // { elapsedMs, at } of the review shown as the big time
 let pauseTargetsReview = false;
+let sessionPausedNow = false;
+
+// A paused timer is frozen: show its whole seconds, never "endTime - now" floored
+// (that is a few milliseconds under the frozen value and flipped between two seconds).
+function frozenMs(endTime) {
+  return Math.round(Math.max(0, endTime - Date.now()) / 1000) * 1000;
+}
 
 function steadyEndTime(endTime) {
   if (countdownEndTime !== null && Math.abs(endTime - countdownEndTime) < REBASE_TOLERANCE_MS) {
@@ -556,7 +570,6 @@ function reviewTakesOver(session) {
   const review = session?.reviewInProgress;
   return !!(
     session?.isActive &&
-    !session.isPaused &&
     session.source !== "review" &&
     review &&
     !review.isPaused &&
@@ -564,7 +577,7 @@ function reviewTakesOver(session) {
   );
 }
 
-function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline, review) {
+function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline, review, frozenRemainingMs = null) {
   stopCountdown();
   countdownEndTime = hasNoRealDeadline ? null : endTime;
   reviewClock = review || null;
@@ -586,6 +599,13 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
       updateRuler(0, 0, false);
     }
     if (hasNoRealDeadline) return;
+    if (frozenRemainingMs !== null) {
+      // The session itself is paused (a review is the running one): its time stands still.
+      if (!pomodoroInfoEl.classList.contains("hidden")) {
+        pomodoroChipTimeEl.textContent = formatElapsed(frozenRemainingMs);
+      }
+      return;
+    }
     const msRemaining = Math.max(0, endTime - now);
     if (!review) {
       countdownEl.textContent = formatElapsed(msRemaining);
@@ -651,9 +671,13 @@ function renderActiveSession(session) {
 
   const reviewMain = reviewTakesOver(session);
   pauseTargetsReview = reviewMain;
-  pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
-  pauseBtn.classList.toggle("is-paused", !!session.isPaused);
-  pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
+  // With a review running the big timer is the review (and it is running), so the paused
+  // look and the Resume key belong to the pomodoro chip's own button instead.
+  const showPaused = !!session.isPaused && !reviewMain;
+  sessionPausedNow = !!session.isPaused;
+  pausedBadgeEl.classList.toggle("hidden", !showPaused);
+  pauseBtn.classList.toggle("is-paused", showPaused);
+  pauseBtn.textContent = showPaused ? "Resume Timer" : "Pause Timer";
 
   breakBadgeEl.classList.toggle("hidden", !session.isBreak);
 
@@ -712,15 +736,15 @@ function renderActiveSession(session) {
   countdownLabelEl.textContent = reviewMain ? "Review time" : hasNoRealDeadline ? "Time elapsed" : "Time left";
 
   const activeElapsedMs = session.activeElapsedMs || 0;
-  if (session.isPaused) {
+  if (session.isPaused && !reviewMain) {
     stopCountdown();
     countdownEndTime = null;
     reviewClock = null;
     const pausedText = hasNoRealDeadline
       ? formatElapsed(activeElapsedMs)
-      : formatElapsed(Math.max(0, session.endTime - Date.now()));
+      : formatElapsed(frozenMs(session.endTime));
     countdownEl.textContent = pausedText;
-    updateRuler(activeElapsedMs, hasNoRealDeadline ? 0 : Math.max(0, session.endTime - Date.now()), !hasNoRealDeadline && !pomodoro);
+    updateRuler(activeElapsedMs, hasNoRealDeadline ? 0 : frozenMs(session.endTime), !hasNoRealDeadline && !pomodoro);
     if (pomodoro) {
       pomodoroChipTimeEl.textContent = pausedText;
     }
@@ -728,7 +752,10 @@ function renderActiveSession(session) {
     const clock = reviewMain
       ? steadyReviewClock(reviewClock, (session.reviewInProgress.elapsedSeconds || 0) * 1000)
       : null;
-    startCountdown(steadyEndTime(session.endTime), activeElapsedMs, Date.now(), hasNoRealDeadline, clock);
+    startCountdown(
+      steadyEndTime(session.endTime), activeElapsedMs, Date.now(), hasNoRealDeadline, clock,
+      session.isPaused ? frozenMs(session.endTime) : null,
+    );
   }
 }
 
