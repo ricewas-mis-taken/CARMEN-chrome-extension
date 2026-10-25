@@ -17,7 +17,7 @@
 core/               shared sync logic, browser-agnostic
 chrome/             Chrome + Edge (Manifest V3)
 firefox/            Firefox (Manifest V3, via webextension-polyfill)
-shared-assets/      canonical icon (physically copied into chrome/ and firefox/)
+shared-assets/      canonical icon and theme.css (physically copied into every build)
 ```
 
 `carmen-extension-sharing/` is a separate, self-contained build with desktop sync stripped out — no local server, nothing to configure.
@@ -28,6 +28,8 @@ shared-assets/      canonical icon (physically copied into chrome/ and firefox/)
 cp core/*.js chrome/core/
 cp core/*.js firefox/core/
 ```
+
+The design tokens (`shared-assets/theme.css`) and icon are copied the same way: edit the one in `shared-assets/`, then run `sh sync-theme.sh`.
 
 ## Install (unpacked)
 
