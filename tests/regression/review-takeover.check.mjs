@@ -13,7 +13,7 @@ const dirs = ["chrome", "firefox"];
 if (!scenario) {
   let failed = false;
   for (const dir of dirs) {
-    for (const s of ["takeover", "paused-review", "pause-targets-review", "resume-pomodoro", "steady-time", "paused-pomodoro", "resume-paused-pomodoro", "frozen-time"]) {
+    for (const s of ["takeover", "paused-review", "pause-targets-review", "resume-pomodoro", "steady-time", "paused-pomodoro", "resume-paused-pomodoro", "frozen-time", "first-attempt"]) {
       const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
         env: { ...process.env, TAKEOVER_SCENARIO: s, TAKEOVER_DIR: dir },
         encoding: "utf8",
@@ -55,6 +55,9 @@ const sendMessage = (m, cb) => { const r = respond(m); if (cb) setTimeout(() => 
 // The pomodoro itself is paused (frozen at 02:40, a few ms "old" like a fresh /status) while the review runs.
 const frozen = (over = {}) => pomodoroSession({ isPaused: true, endTime: Date.now() + 160000 - 7, ...over });
 if (scenario === "paused-pomodoro") statuses = [frozen()];
+// The state of a real session: a paused pomodoro under a running FIRST ATTEMPT timing (isFirstAttempt true,
+// no problem yet). It used to be left out of the takeover, so none of this ever showed.
+if (scenario === "first-attempt") statuses = [frozen({ reviewInProgress: review({ isFirstAttempt: true, problemName: "First attempt", problemId: null, subjectName: null, elapsedSeconds: 278 }) })];
 if (scenario === "resume-paused-pomodoro") statuses = [frozen(), pomodoroSession({ reviewInProgress: review({ isPaused: true }) })];
 if (scenario === "frozen-time") statuses = [frozen({ reviewInProgress: null }), frozen({ reviewInProgress: null, endTime: Date.now() + 160000 + 300 })];
 if (scenario === "resume-pomodoro") statuses = [pomodoroSession(), pomodoroSession({ reviewInProgress: review({ isPaused: true }) })];
@@ -114,6 +117,17 @@ if (scenario === "paused-pomodoro") {
   await getEl("pause-btn").click();
   await wait(40);
   if (!sent.includes("pauseReview") || sent.includes("pauseSession")) fail(`pause must pause the review only, sent ${sent.join(",")}`);
+}
+
+if (scenario === "first-attempt") {
+  if (text("countdown") !== "04:38") fail(`a running first attempt is the big time, got ${text("countdown")}`);
+  if (text("countdown-label") !== "Review time") fail("label should be Review time");
+  if (hidden("pomodoro-resume-btn")) fail("Resume pomodoro should show");
+  if (text("review-info-name-label") !== "Timing" || text("review-info-name") !== "First attempt") fail("info should say Timing: First attempt");
+  if (text("pomodoro-chip-time") !== "02:40") fail(`paused pomodoro chip should stay 02:40, got ${text("pomodoro-chip-time")}`);
+  await getEl("pause-btn").click();
+  await wait(40);
+  if (!sent.includes("pauseReview") || sent.includes("pauseSession")) fail(`pause must pause the first attempt, sent ${sent.join(",")}`);
 }
 
 if (scenario === "resume-paused-pomodoro") {
