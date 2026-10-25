@@ -570,8 +570,7 @@ function reviewTakesOver(session) {
     session?.isActive &&
     session.source !== "review" &&
     review &&
-    !review.isPaused &&
-    !review.isFirstAttempt
+    !review.isPaused
   );
 }
 
@@ -706,7 +705,7 @@ function renderActiveSession(session) {
     // sites and violations above and below are already the review's.
     const review = session.reviewInProgress;
     reviewInfoTaskEl.textContent = session.eventTitle || "—";
-    reviewInfoNameLabelEl.textContent = "Review";
+    reviewInfoNameLabelEl.textContent = review.isFirstAttempt ? "Timing" : "Review";
     reviewInfoNameEl.textContent = review.problemName || "—";
     const hasSubject = !!review.subjectName;
     reviewInfoSubjectLineEl.classList.toggle("hidden", !hasSubject);
@@ -879,10 +878,8 @@ function renderReviewProgressBanner(session) {
   if (review.isPaused) {
     reviewProgressPausedLineEl.textContent = review.autoPaused ? "Paused (on pomodoro break)" : "Paused";
   }
-  // A first attempt's timer is owned by the desktop banner alone (no
-  // review_store entry exists for the pause/resume routes to act on), so the
-  // extension can show it but not pause it.
-  reviewProgressPauseBtn.classList.toggle("hidden", !!review.isFirstAttempt);
+  // A first attempt has no review_store row, but the desktop now pauses and resumes it on
+  // request (POST /review/pause|resume), so it gets the same button as any review.
   reviewProgressPauseBtn.textContent = review.isPaused ? "Resume" : "Pause";
 }
 
