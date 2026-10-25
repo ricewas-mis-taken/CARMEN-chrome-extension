@@ -476,3 +476,7 @@ the same day's live-connection entry there changes nothing for the extension).
   Kept: every element id and class the scripts and tests use. Only script change is the tick ruler under the time (elapsed / (elapsed + left)); it is hidden for burnout, review and pomodoro sessions, where endTime isn't a real session deadline.
   Replaced the emoji markers with CSS dots so the icon style is one thing.
   Note: the desktop app's Qt UI still uses the old teal; the extension is now cobalt. Not changed here.
+
+[2026-10-25] Popup: any running review is the big time, first attempts included
+  The takeover skipped first attempts ("the extension can't pause them"), but a first attempt was what was running, so a paused pomodoro stayed big and nothing swapped. It now takes the big time too, the pause key sends pauseReview, and "Resume pomodoro" sends pauseReview then resumeSession. Also: a frozen time is shown in whole seconds (it was endTime - now, a few ms short, flipping 02:40 / 02:39).
+  Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-25] (a first attempt can be paused from outside).
