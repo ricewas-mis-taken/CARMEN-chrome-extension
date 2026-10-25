@@ -13,7 +13,7 @@ const dirs = ["chrome", "firefox"];
 if (!scenario) {
   let failed = false;
   for (const dir of dirs) {
-    for (const s of ["takeover", "paused-review", "pause-targets-review", "resume-pomodoro", "steady-time"]) {
+    for (const s of ["takeover", "paused-review", "pause-targets-review", "resume-pomodoro", "steady-time", "paused-pomodoro", "resume-paused-pomodoro", "frozen-time"]) {
       const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
         env: { ...process.env, TAKEOVER_SCENARIO: s, TAKEOVER_DIR: dir },
         encoding: "utf8",
@@ -52,6 +52,11 @@ const respond = (m) => {
 // chrome calls back; firefox awaits the returned promise
 const sendMessage = (m, cb) => { const r = respond(m); if (cb) setTimeout(() => cb(r), 0); return Promise.resolve(r); };
 
+// The pomodoro itself is paused (frozen at 02:40, a few ms "old" like a fresh /status) while the review runs.
+const frozen = (over = {}) => pomodoroSession({ isPaused: true, endTime: Date.now() + 160000 - 7, ...over });
+if (scenario === "paused-pomodoro") statuses = [frozen()];
+if (scenario === "resume-paused-pomodoro") statuses = [frozen(), pomodoroSession({ reviewInProgress: review({ isPaused: true }) })];
+if (scenario === "frozen-time") statuses = [frozen({ reviewInProgress: null }), frozen({ reviewInProgress: null, endTime: Date.now() + 160000 + 300 })];
 if (scenario === "resume-pomodoro") statuses = [pomodoroSession(), pomodoroSession({ reviewInProgress: review({ isPaused: true }) })];
 if (scenario === "paused-review") statuses = [pomodoroSession({ reviewInProgress: review({ isPaused: true, autoPaused: true }) })];
 if (scenario === "steady-time") {
@@ -97,6 +102,33 @@ if (scenario === "resume-pomodoro") {
   await wait(80);
   if (!sent.includes("pauseReview")) fail("Resume pomodoro should set the review aside (pauseReview)");
   if (!/^1[67]:\d\d$/.test(text("countdown"))) fail(`after resuming the pomodoro it should be the big time, got ${text("countdown")}`);
+}
+
+if (scenario === "paused-pomodoro") {
+  if (text("countdown") !== "05:12") fail(`a running review is the big time even under a paused pomodoro, got ${text("countdown")}`);
+  if (text("countdown-label") !== "Review time") fail("label should be Review time");
+  if (hidden("pomodoro-resume-btn")) fail("Resume pomodoro should show");
+  if (!hidden("paused-badge")) fail("the Paused badge belongs to the pomodoro chip, not the big timer");
+  if (text("pause-btn") !== "Pause Timer") fail(`pause key should pause the review, got ${text("pause-btn")}`);
+  if (text("pomodoro-chip-time") !== "02:40") fail(`the paused pomodoro chip should stay at 02:40, got ${text("pomodoro-chip-time")}`);
+  await getEl("pause-btn").click();
+  await wait(40);
+  if (!sent.includes("pauseReview") || sent.includes("pauseSession")) fail(`pause must pause the review only, sent ${sent.join(",")}`);
+}
+
+if (scenario === "resume-paused-pomodoro") {
+  await getEl("pomodoro-resume-btn").click();
+  await wait(100);
+  const i = sent.indexOf("pauseReview");
+  if (i < 0 || sent.indexOf("resumeSession") < i) fail(`should pause the review then resume the pomodoro, sent ${sent.join(",")}`);
+  if (text("countdown") === "05:12") fail("the pomodoro should be the big time again");
+}
+
+if (scenario === "frozen-time") {
+  if (text("countdown") !== "02:40") fail(`a paused 160s timer should read 02:40, got ${text("countdown")}`);
+  await getEl("review-progress-pause-btn").click(); // another status poll, a few hundred ms "older"
+  await wait(80);
+  if (text("countdown") !== "02:40") fail(`the frozen time flipped to ${text("countdown")} on a re-poll`);
 }
 
 if (scenario === "steady-time") {
