@@ -39,6 +39,7 @@ const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
 const countdownLabelEl = document.getElementById("countdown-label");
+const progressRulerEl = document.getElementById("progress-ruler");
 const lockModeBadgeEl = document.getElementById("lock-mode-badge");
 const pausedBadgeEl = document.getElementById("paused-badge");
 const breakBadgeEl = document.getElementById("break-badge");
@@ -494,6 +495,19 @@ function formatElapsed(msElapsed) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+// The tick ruler under the time: elapsed / (elapsed + left) of an ordinary
+// timed session. Hidden for anything without one real deadline (burnout,
+// review, pomodoro -- there endTime is just the current phase's).
+function updateRuler(elapsedMs, remainingMs, show) {
+  if (!progressRulerEl || !progressRulerEl.classList || typeof progressRulerEl.classList.toggle !== "function") return;
+  const total = elapsedMs + remainingMs;
+  const visible = !!show && total > 0;
+  progressRulerEl.classList.toggle("hidden", !visible);
+  if (visible && progressRulerEl.style && typeof progressRulerEl.style.setProperty === "function") {
+    progressRulerEl.style.setProperty("--p", String(Math.min(1, Math.max(0, elapsedMs / total))));
+  }
+}
+
 let lastZeroRefreshAt = 0;
 
 function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDeadline) {
@@ -509,9 +523,15 @@ function startCountdown(endTime, baseActiveElapsedMs, baseTimestamp, hasNoRealDe
     if (hasNoRealDeadline) {
       const elapsed = baseActiveElapsedMs + (Date.now() - baseTimestamp);
       countdownEl.textContent = formatElapsed(elapsed);
+      updateRuler(0, 0, false);
     } else {
       const msRemaining = Math.max(0, endTime - Date.now());
       countdownEl.textContent = formatElapsed(msRemaining);
+      updateRuler(
+        baseActiveElapsedMs + (Date.now() - baseTimestamp),
+        msRemaining,
+        pomodoroInfoEl.classList.contains("hidden"),
+      );
       // Mirrors the same countdown into the pomodoro chip (see
       // renderActiveSession) whenever it's showing -- endTime during a
       // pomodoro is already the current phase's own deadline (see
@@ -631,6 +651,7 @@ function renderActiveSession(session) {
       ? formatElapsed(activeElapsedMs)
       : formatElapsed(Math.max(0, session.endTime - Date.now()));
     countdownEl.textContent = pausedText;
+    updateRuler(activeElapsedMs, hasNoRealDeadline ? 0 : Math.max(0, session.endTime - Date.now()), !hasNoRealDeadline && !pomodoro);
     if (pomodoro) {
       pomodoroChipTimeEl.textContent = pausedText;
     }
