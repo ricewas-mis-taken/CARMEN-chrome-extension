@@ -465,3 +465,26 @@ the same day's live-connection entry there changes nothing for the extension).
   Fork: keep the "only clear if lastArmedAlarmEndTime !== 0" guard, or always clear.
   Chose always clear. lastArmedAlarmEndTime is in-memory and resets to 0 when the MV3 worker restarts, but the chrome.alarms entry survives. Pause after a restart skipped the clear, the stale alarm fired at the original end time, found the (already ended) session inactive and showed "Focus session complete" long after the user ended it. Clearing a missing alarm is a no-op, so the guard bought nothing.
   Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-21] (no desktop change; pairs with the [2026-09-28] alarm-trust entry).
+
+[2026-10-25] Extension redesign: shared tokens, a session skin that flips, one theme file per build
+  Fork 1: restyle each page on its own, or put colour/type/spacing in one theme file.
+  Chose one theme file (shared-assets/theme.css, copied into chrome/, firefox/ and carmen-extension-sharing/ by sync-theme.sh, same as the icon). The four pages and the sharing build had drifted into near-identical copies of one palette; now a colour change is one edit plus a sync.
+  Fork 2: how the popup shows "a session is running".
+  Chose to re-point the tokens, not restyle components: body:has(#active-view:not(.hidden)) swaps in the dark "locked" skin, and #paused-badge / #break-badge swap the accent to amber / violet. No script change, no per-component state classes. Needs :has() -- fine for Chrome 105+ and the Firefox 128 minimum already declared.
+  Fork 3: fonts.
+  Chose system stacks only (Bahnschrift Condensed for the time and wordmark, Segoe UI Variable for text, Cascadia Mono for domains/URLs) over bundling font files: no new binaries in the repo, nothing to license, and the fallbacks (DIN Condensed, Avenir Next Condensed, Arial Narrow) keep the condensed look on macOS/Linux.
+  Kept: every element id and class the scripts and tests use. Only script change is the tick ruler under the time (elapsed / (elapsed + left)); it is hidden for burnout, review and pomodoro sessions, where endTime isn't a real session deadline.
+  Replaced the emoji markers with CSS dots so the icon style is one thing.
+  Note: the desktop app's Qt UI still uses the old teal; the extension is now cobalt. Not changed here.
+
+[2026-10-25] Popup: any running review is the big time, first attempts included
+  The takeover skipped first attempts ("the extension can't pause them"), but a first attempt was what was running, so a paused pomodoro stayed big and nothing swapped. It now takes the big time too, the pause key sends pauseReview, and "Resume pomodoro" sends pauseReview then resumeSession. Also: a frozen time is shown in whole seconds (it was endTime - now, a few ms short, flipping 02:40 / 02:39).
+  Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-25] (a first attempt can be paused from outside).
+
+2026-10-25  Shared colour themes (counterpart: carmen-desktop DESIGN_DECISIONS.txt, same date, "Shared colour themes")
+  The popup fetches GET /theme from the desktop and sets its CSS variables (core/theme-sync.js).
+  Fork: ship our own theme list in the extension vs. take the desktop's. Took the desktop's, so a
+  colour picked once shows up in both and the two cannot drift. The last theme is cached in
+  localStorage so the popup is right instantly and when the desktop is off.
+  Dark skin (system dark mode, running session) is left alone: only the light palette is themed.
+  Not done: the content-script overlays and the additions page are not themed.

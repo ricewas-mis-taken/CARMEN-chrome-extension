@@ -2,20 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>CARMEN — Add sites from last session</title>
+    <title>Carmen · Sites added last session</title>
+    <link rel="stylesheet" href="../theme.css" />
     <link rel="stylesheet" href="../log/log.css" />
     <link rel="stylesheet" href="additions.css" />
   </head>
   <body>
     <div id="app">
       <header class="header">
-        <div class="logo-dot"></div>
+        <div class="logo-dot" aria-hidden="true"></div>
         <h1>Sites added last session</h1>
       </header>
 
       <p class="summary">
-        These were added with "Add a site" during your last session, which only applies for
-        that one session. Pick which ones should stay on your saved whitelist for next time.
+        You added these with "Add a site" during your last session, and they only applied to
+        that session. Choose the ones to keep on your saved list for next time.
       </p>
 
       <div id="empty-state" class="hidden">
@@ -26,7 +27,7 @@
 
       <div id="actions-row" class="actions-row hidden">
         <button type="button" id="add-selected-btn" class="primary-btn">
-          Add selected to saved whitelist
+          Add selected to saved list
         </button>
         <button type="button" id="dismiss-btn" class="ghost-btn">Dismiss</button>
       </div>

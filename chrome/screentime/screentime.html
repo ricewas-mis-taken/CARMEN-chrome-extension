@@ -2,22 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>CARMEN — Screen Time</title>
+    <title>Carmen · Screen time</title>
+    <link rel="stylesheet" href="../theme.css" />
     <link rel="stylesheet" href="screentime.css" />
   </head>
   <body>
     <div id="app">
       <header class="header">
-        <div class="logo-dot"></div>
-        <h1>CARMEN — Screen Time</h1>
+        <div class="logo-dot" aria-hidden="true"></div>
+        <h1>Screen time</h1>
       </header>
 
       <p class="hint">
-        Domain-only -- the desktop app also tracks app time; see its Screen Time tab for both.
+        Websites only. The desktop app also tracks app time; its Screen Time tab shows both.
       </p>
 
       <div id="category-warning" class="category-warning">
-        <span>Site categories failed to load -- everything below is showing as "Other".</span>
+        <span>Site categories failed to load, so every site is showing as Other.</span>
         <button type="button" id="category-retry-btn">Retry</button>
       </div>
 

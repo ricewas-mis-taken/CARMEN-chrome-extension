@@ -1,29 +1,41 @@
+/* Sites added last session. Page chrome comes from ../log/log.css. */
+
+#app {
+  max-width: 680px;
+}
+
 .additions-list {
   list-style: none;
-  margin: 0 0 20px;
+  margin: 0 0 22px;
   padding: 0;
 }
 
 .addition-row {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #d9e2e5;
-  border-radius: 10px;
+  gap: 12px;
   margin-bottom: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  transition: border-color 0.14s ease;
+}
+
+.addition-row:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .addition-row.already-saved {
-  opacity: 0.6;
+  opacity: 0.65;
 }
 
 .addition-row input[type="checkbox"] {
-  margin-top: 3px;
-  width: 15px;
-  height: 15px;
-  accent-color: #4fb0a5;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
 }
 
 .addition-row .addition-body {
@@ -32,23 +44,24 @@
 }
 
 .addition-row .addition-domain {
+  font-family: var(--mono);
   font-size: 13px;
-  font-weight: 700;
-  color: #1f2933;
+  font-weight: 600;
+  color: var(--ink);
   word-break: break-all;
 }
 
 .addition-row .addition-reason {
-  font-size: 12px;
-  color: #7b8794;
-  margin-top: 2px;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--ink-3);
 }
 
 .addition-row .addition-badge {
-  font-size: 11px;
-  font-weight: 700;
-  color: #3f8f86;
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
+  color: var(--mint);
 }
 
 .actions-row {
@@ -57,33 +70,7 @@
   gap: 10px;
 }
 
-.primary-btn {
-  padding: 10px 16px;
-  border: none;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #4fb0a5, #3f8f86);
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.primary-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.ghost-btn {
-  padding: 10px 16px;
-  border: 1px solid #d9e2e5;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #52606d;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.ghost-btn:hover {
-  background: #eef2f4;
+.actions-row .primary-btn {
+  width: auto;
+  padding: 11px 18px;
 }

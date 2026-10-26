@@ -3,29 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <title>CARMEN</title>
+    <link rel="stylesheet" href="../theme.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <div id="app">
       <section id="setup-view" class="view">
         <header class="header">
-          <div class="logo-dot"></div>
-          <h1>CARMEN</h1>
+          <div class="logo-dot" aria-hidden="true"></div>
+          <h1>carmen</h1>
+          <span class="state-pill pill" aria-live="polite"></span>
         </header>
 
         <div class="field">
-          <label>Duration</label>
-          <div class="preset-row">
-            <button type="button" class="preset-btn" data-minutes="15">15m</button>
-            <button type="button" class="preset-btn" data-minutes="25">25m</button>
-            <button type="button" class="preset-btn" data-minutes="45">45m</button>
-            <button type="button" class="preset-btn" data-minutes="60">60m</button>
+          <label id="duration-label">Duration</label>
+          <div class="preset-row" role="group" aria-labelledby="duration-label">
+            <button type="button" class="preset-btn" data-minutes="15"><b>15</b><i>min</i></button>
+            <button type="button" class="preset-btn" data-minutes="25"><b>25</b><i>min</i></button>
+            <button type="button" class="preset-btn" data-minutes="45"><b>45</b><i>min</i></button>
+            <button type="button" class="preset-btn" data-minutes="60"><b>60</b><i>min</i></button>
           </div>
           <input
             type="number"
             id="custom-minutes"
             min="1"
-            placeholder="Custom minutes"
+            placeholder="Or type any number of minutes"
+            aria-label="Custom minutes"
           />
         </div>
 
@@ -34,23 +37,23 @@
           <div class="lock-toggle">
             <button type="button" class="lock-card selected" id="lock-soft" data-mode="soft">
               <span class="lock-title">Soft Lock</span>
-              <span class="lock-desc">Shows a 3-second warning, then lets you stay.</span>
+              <span class="lock-desc">Warns for 3 seconds, then lets you stay.</span>
             </button>
             <button type="button" class="lock-card" id="lock-hard" data-mode="hard">
               <span class="lock-title">Hard Lock</span>
-              <span class="lock-desc">Instantly redirects you back, no warning.</span>
+              <span class="lock-desc">Sends you straight back. No warning.</span>
             </button>
           </div>
         </div>
 
         <div class="field">
-          <label for="whitelist">Websites</label>
+          <label for="whitelist">Allowed websites</label>
           <textarea
             id="whitelist"
             rows="3"
             placeholder="github.com&#10;docs.google.com&#10;stackoverflow.com"
           ></textarea>
-          <span class="hint">One domain or URL substring per line.</span>
+          <span class="hint">One domain or URL fragment per line.</span>
         </div>
 
         <button type="button" id="start-btn" class="primary-btn">
@@ -64,8 +67,9 @@
 
       <section id="active-view" class="view hidden">
         <header class="header">
-          <div class="logo-dot"></div>
-          <h1>CARMEN</h1>
+          <div class="logo-dot" aria-hidden="true"></div>
+          <h1>carmen</h1>
+          <span class="state-pill pill" aria-live="polite"></span>
         </header>
 
         <div class="countdown" id="countdown">00:00</div>
@@ -81,16 +85,16 @@
 
         <div class="violations-row">
           <span class="violations-count" id="violations-count">0 violations</span>
-          <button type="button" id="view-log-btn" class="ghost-btn">View Full Log</button>
+          <button type="button" id="view-log-btn" class="ghost-btn">View full log</button>
         </div>
 
         <div class="field">
-          <label>Allowed sites</label>
-          <ul class="allowed-sites" id="allowed-sites"></ul>
+          <label id="allowed-sites-label">Allowed sites</label>
+          <ul class="allowed-sites" id="allowed-sites" tabindex="0" aria-labelledby="allowed-sites-label"></ul>
         </div>
 
         <div class="field">
-          <label for="add-site-input">Add a site</label>
+          <label for="add-site-input">Add a site for now</label>
           <div class="add-site-row">
             <input type="text" id="add-site-input" placeholder="e.g. wikipedia.org" />
             <button type="button" id="add-site-btn" class="secondary-btn">Add</button>
@@ -106,7 +110,7 @@
                 Cancel
               </button>
               <button type="button" id="add-site-submit-btn" class="secondary-btn">
-                Submit reason
+                Add site
               </button>
             </div>
           </div>

@@ -6,6 +6,13 @@
   const BLACKOUT_ID = "carmen-blackout-root";
   const GRACE_SECONDS = 3;
 
+  // Same type stack as the extension's own pages (see theme.css): a condensed
+  // DIN-style face for the headline, the system UI face for everything else.
+  const DISPLAY_FONT =
+    '"Bahnschrift Condensed", "Bahnschrift SemiCondensed", "Bahnschrift", "DIN Condensed", "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif';
+  const BODY_FONT =
+    '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Roboto, sans-serif';
+
   function showOverlay(overlayMessage) {
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) existing.remove();
@@ -16,47 +23,56 @@
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      background: rgba(20, 24, 28, 0.55);
-      backdrop-filter: blur(2px);
+      background: rgba(8, 12, 22, 0.62);
+      backdrop-filter: blur(3px);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: ${BODY_FONT};
     `;
 
     const card = document.createElement("div");
     card.style.cssText = `
-      background: #ffffff;
-      border-radius: 16px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
-      padding: 32px 36px;
-      max-width: 360px;
-      text-align: center;
+      box-sizing: border-box;
+      width: 380px;
+      max-width: calc(100vw - 32px);
+      padding: 26px 28px 24px;
+      border-radius: 14px;
+      border: 1px solid #2c3858;
+      background: #0e1424;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      text-align: left;
     `;
 
     const title = document.createElement("div");
-    title.textContent = "You're off track";
+    title.textContent = "Off track";
     title.style.cssText = `
-      font-size: 18px;
-      font-weight: 600;
-      color: #1f2933;
-      margin-bottom: 8px;
+      font-family: ${DISPLAY_FONT};
+      font-size: 44px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0.005em;
+      color: #f1f4fc;
+      margin: 0 0 10px;
     `;
 
     const message = document.createElement("div");
     message.textContent = overlayMessage;
     message.style.cssText = `
       font-size: 14px;
-      color: #52606d;
-      margin-bottom: 20px;
+      line-height: 1.5;
+      color: #b9c2d8;
+      margin: 0 0 20px;
     `;
 
+    // A ruler that runs out over the grace period: one tick per ~2%.
     const barTrack = document.createElement("div");
     barTrack.style.cssText = `
       width: 100%;
-      height: 6px;
-      border-radius: 999px;
-      background: #e4e7eb;
+      height: 14px;
+      background: #38466a;
+      -webkit-mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px 6px);
+      mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px 6px);
       overflow: hidden;
     `;
 
@@ -64,8 +80,7 @@
     barFill.style.cssText = `
       height: 100%;
       width: 100%;
-      border-radius: 999px;
-      background: linear-gradient(90deg, #4fb0a5, #6bc9bd);
+      background: #8ea0ff;
       transform-origin: left;
       transition: transform ${GRACE_SECONDS}s linear;
     `;
@@ -101,33 +116,38 @@
       right: 20px;
       bottom: 20px;
       z-index: 2147483647;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: ${BODY_FONT};
     `;
 
     const card = document.createElement("div");
     card.style.cssText = `
-      background: #ffffff;
-      border-radius: 12px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
-      padding: 18px 20px;
-      width: 300px;
+      box-sizing: border-box;
+      width: 320px;
+      padding: 18px 20px 16px;
+      border-radius: 14px;
+      border: 1px solid #2c3858;
+      background: #0e1424;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
     `;
 
     const title = document.createElement("div");
     title.textContent = `Save ${domains.length} site${domains.length === 1 ? "" : "s"} to "${taskTitle}"?`;
     title.style.cssText = `
       font-size: 14px;
-      font-weight: 600;
-      color: #1f2933;
-      margin-bottom: 6px;
+      font-weight: 650;
+      line-height: 1.35;
+      color: #f1f4fc;
+      margin-bottom: 8px;
     `;
 
     const list = document.createElement("div");
     list.textContent = domains.join(", ");
     list.style.cssText = `
+      font-family: "Cascadia Mono", "SF Mono", ui-monospace, Consolas, monospace;
       font-size: 12px;
-      color: #52606d;
-      margin-bottom: 14px;
+      line-height: 1.5;
+      color: #b9c2d8;
+      margin-bottom: 16px;
       word-break: break-word;
     `;
 
@@ -142,12 +162,12 @@
     const noBtn = document.createElement("button");
     noBtn.textContent = "No";
     noBtn.style.cssText = `
-      border: 1px solid #cbd2d9;
-      background: #ffffff;
-      color: #1f2933;
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 13px;
+      border: 1px solid #38466a;
+      background: transparent;
+      color: #b9c2d8;
+      border-radius: 9px;
+      padding: 7px 16px;
+      font: 500 13px ${BODY_FONT};
       cursor: pointer;
     `;
     noBtn.addEventListener("click", () => respond(false));
@@ -156,12 +176,11 @@
     yesBtn.textContent = "Yes, save";
     yesBtn.style.cssText = `
       border: none;
-      background: #4fb0a5;
-      color: #ffffff;
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 13px;
-      font-weight: 600;
+      background: #8ea0ff;
+      color: #0a0f1d;
+      border-radius: 9px;
+      padding: 7px 16px;
+      font: 650 13px ${BODY_FONT};
       cursor: pointer;
     `;
     yesBtn.addEventListener("click", () => respond(true));
@@ -193,7 +212,7 @@
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      background: #14181c;
+      background: #0a0f1d;
     `;
     document.documentElement.appendChild(root);
   }
