@@ -480,3 +480,11 @@ the same day's live-connection entry there changes nothing for the extension).
 [2026-10-25] Popup: any running review is the big time, first attempts included
   The takeover skipped first attempts ("the extension can't pause them"), but a first attempt was what was running, so a paused pomodoro stayed big and nothing swapped. It now takes the big time too, the pause key sends pauseReview, and "Resume pomodoro" sends pauseReview then resumeSession. Also: a frozen time is shown in whole seconds (it was endTime - now, a few ms short, flipping 02:40 / 02:39).
   Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-10-25] (a first attempt can be paused from outside).
+
+2026-10-25  Shared colour themes (counterpart: carmen-desktop DESIGN_DECISIONS.txt, same date, "Shared colour themes")
+  The popup fetches GET /theme from the desktop and sets its CSS variables (core/theme-sync.js).
+  Fork: ship our own theme list in the extension vs. take the desktop's. Took the desktop's, so a
+  colour picked once shows up in both and the two cannot drift. The last theme is cached in
+  localStorage so the popup is right instantly and when the desktop is off.
+  Dark skin (system dark mode, running session) is left alone: only the light palette is themed.
+  Not done: the content-script overlays and the additions page are not themed.
