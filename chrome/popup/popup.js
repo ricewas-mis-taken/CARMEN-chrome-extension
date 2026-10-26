@@ -1,6 +1,9 @@
 import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
 import { getApiToken, setApiToken } from "../core/api-token.js";
+import { applyDesktopTheme } from "../core/theme-sync.js";
+
+applyDesktopTheme();
 
 const setupView = document.getElementById("setup-view");
 const activeView = document.getElementById("active-view");

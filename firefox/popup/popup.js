@@ -1,6 +1,9 @@
 import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
 import { getApiToken, setApiToken } from "../core/api-token.js";
+import { applyDesktopTheme } from "../core/theme-sync.js";
+
+applyDesktopTheme();
 
 // browser.runtime.sendMessage() REJECTS when the background has no answering
 // listener (page not up yet, or the handler never responded); chrome's callback
