@@ -1268,8 +1268,14 @@ async function handleTabUrl(tabId, url) {
     if (lastFocused && lastFocused.id !== currentTab.windowId) return;
   } catch (err) {}
 
+  // The browser itself picked this tab (the last one clicked) right after the user closed another one.
+  // Under a hard lock it is redirected below anyway, so the user did nothing wrong: no violation.
+  const landedByClosing = (tabLandedByCloseUntil.get(tabId) || 0) > Date.now();
+  tabLandedByCloseUntil.delete(tabId);
+  const forgiven = landedByClosing && session.lockMode === "hard";
+
   await openViolationsHydrated;
-  if (!openViolationTabs.has(tabId)) {
+  if (!forgiven && !openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
     persistOpenViolationTabs();
     if (session.source === "browser-only") {
@@ -1513,7 +1519,16 @@ async function isWindowFocused(windowId) {
   }
 }
 
+// Closing a tab makes the browser activate another one on its own. Remember when a tab last closed, per
+// window, so that landing is told apart from the user choosing a tab.
+const TAB_CLOSE_LANDING_MS = 1500;
+const lastTabClosedAtByWindow = new Map();
+const tabLandedByCloseUntil = new Map();
+
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  if (Date.now() - (lastTabClosedAtByWindow.get(windowId) || 0) < TAB_CLOSE_LANDING_MS) {
+    tabLandedByCloseUntil.set(tabId, Date.now() + TAB_CLOSE_LANDING_MS);
+  }
   // The tab just switched away from is now a background tab -- cloak it
   // right away instead of waiting for the next periodic tick.
   sweepTabsForCloak();
@@ -1570,7 +1585,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  if (removeInfo && !removeInfo.isWindowClosing) lastTabClosedAtByWindow.set(removeInfo.windowId, Date.now());
+  tabLandedByCloseUntil.delete(tabId);
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);

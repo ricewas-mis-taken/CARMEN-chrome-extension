@@ -1297,8 +1297,12 @@ async function handleTabUrl(tabId, url) {
     if (lastFocused && lastFocused.id !== currentTab.windowId) return;
   } catch (err) {}
 
+  const landedByClosing = (tabLandedByCloseUntil.get(tabId) || 0) > Date.now();
+  tabLandedByCloseUntil.delete(tabId);
+  const forgiven = landedByClosing && session.lockMode === "hard";
+
   await openViolationsHydrated;
-  if (!openViolationTabs.has(tabId)) {
+  if (!forgiven && !openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
     persistOpenViolationTabs();
     if (session.source === "browser-only") {
@@ -1551,7 +1555,14 @@ async function isWindowFocused(windowId) {
   }
 }
 
+const TAB_CLOSE_LANDING_MS = 1500;
+const lastTabClosedAtByWindow = new Map();
+const tabLandedByCloseUntil = new Map();
+
 browser.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  if (Date.now() - (lastTabClosedAtByWindow.get(windowId) || 0) < TAB_CLOSE_LANDING_MS) {
+    tabLandedByCloseUntil.set(tabId, Date.now() + TAB_CLOSE_LANDING_MS);
+  }
   // The tab just switched away from is now a background tab -- cloak it
   // right away instead of waiting for the next periodic tick.
   sweepTabsForCloak();
@@ -1608,7 +1619,9 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-browser.tabs.onRemoved.addListener((tabId) => {
+browser.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  if (removeInfo && !removeInfo.isWindowClosing) lastTabClosedAtByWindow.set(removeInfo.windowId, Date.now());
+  tabLandedByCloseUntil.delete(tabId);
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
