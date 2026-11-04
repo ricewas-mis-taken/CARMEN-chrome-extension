@@ -488,3 +488,12 @@ the same day's live-connection entry there changes nothing for the extension).
   localStorage so the popup is right instantly and when the desktop is off.
   Dark skin (system dark mode, running session) is left alone: only the light palette is themed.
   Not done: the content-script overlays and the additions page are not themed.
+
+2026-11-03  Pause reasons and unblock budget (desktop side built, extension side pending)
+  See carmen-desktop DESIGN_DECISIONS.txt, entry "2026-11-03  Week page, report card, honest pauses, unblock budget,
+  set-aside problems". The desktop now accepts an optional {"reason"} on POST /session/pause (break, interrupted,
+  stuck, checking) and optional {"plan","minutes"} on POST /whitelist/domains/add and /blocklist/apps/remove, and
+  answers 429 {"error":"wait","waitSeconds"} past 3 unblocks a day.
+  The extension does not send any of these yet, so for now its pauses count as "checking" and its unblocks carry no
+  plan. TODO here: a reason picker on the popup's pause button, and an unblock prompt (why / plan / minutes) that
+  handles the 429 wait, mirrored into chrome/ and firefox/.
