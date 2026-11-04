@@ -776,6 +776,33 @@ async function addScreenTimeSecondsLocked(domain, seconds) {
   }).catch(() => {});
 }
 
+// Screen time must mean a person was there, not just a tab being open. The desktop app knows how long ago the
+// last key press or mouse move was (it can see the whole computer; a page cannot), so ask it. A tab that is
+// playing sound counts as watching and needs no input. If the desktop can't be reached the whole stretch counts,
+// as it always did.
+const SCREEN_TIME_IDLE_AFTER_SECONDS = 120;
+
+async function secondsWithSomeoneThere(elapsedSeconds) {
+  try {
+    const audible = await browser.tabs.query({ audible: true });
+    if (audible.length > 0) {
+      apiFetch("/activity/media", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playing: true }),
+      }).catch(() => {});
+      return elapsedSeconds;
+    }
+    const state = await apiFetch("/activity");
+    const idle = state && typeof state.idleSeconds === "number" ? state.idleSeconds : null;
+    if (idle === null || idle <= SCREEN_TIME_IDLE_AFTER_SECONDS) return elapsedSeconds;
+    // The first IDLE_AFTER seconds of a quiet spell still count (reading, thinking); what comes after does not.
+    return Math.max(0, elapsedSeconds - (idle - SCREEN_TIME_IDLE_AFTER_SECONDS));
+  } catch (err) {
+    return elapsedSeconds;
+  }
+}
+
 // Called every time the active domain might have changed (tab switch,
 // window focus change, navigation on the active tab, the tracked tab
 // closing) and once a minute by SCREEN_TIME_ALARM_NAME to checkpoint a
@@ -796,7 +823,8 @@ async function checkpointScreenTime(newDomain, newTabId = null) {
     const current = data[SCREEN_TIME_CURRENT_KEY];
     const now = Date.now();
     if (current && current.domain) {
-      await addScreenTimeSecondsLocked(current.domain, (now - current.startedAt) / 1000);
+      const elapsed = (now - current.startedAt) / 1000;
+      await addScreenTimeSecondsLocked(current.domain, await secondsWithSomeoneThere(elapsed));
     }
     if (newDomain) {
       await browser.storage.local.set({
