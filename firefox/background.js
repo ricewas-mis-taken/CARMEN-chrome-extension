@@ -776,6 +776,33 @@ async function addScreenTimeSecondsLocked(domain, seconds) {
   }).catch(() => {});
 }
 
+// Screen time must mean a person was there, not just a tab being open. The desktop app knows how long ago the
+// last key press or mouse move was (it can see the whole computer; a page cannot), so ask it. A tab that is
+// playing sound counts as watching and needs no input. If the desktop can't be reached the whole stretch counts,
+// as it always did.
+const SCREEN_TIME_IDLE_AFTER_SECONDS = 120;
+
+async function secondsWithSomeoneThere(elapsedSeconds) {
+  try {
+    const audible = await browser.tabs.query({ audible: true });
+    if (audible.length > 0) {
+      apiFetch("/activity/media", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playing: true }),
+      }).catch(() => {});
+      return elapsedSeconds;
+    }
+    const state = await apiFetch("/activity");
+    const idle = state && typeof state.idleSeconds === "number" ? state.idleSeconds : null;
+    if (idle === null || idle <= SCREEN_TIME_IDLE_AFTER_SECONDS) return elapsedSeconds;
+    // The first IDLE_AFTER seconds of a quiet spell still count (reading, thinking); what comes after does not.
+    return Math.max(0, elapsedSeconds - (idle - SCREEN_TIME_IDLE_AFTER_SECONDS));
+  } catch (err) {
+    return elapsedSeconds;
+  }
+}
+
 // Called every time the active domain might have changed (tab switch,
 // window focus change, navigation on the active tab, the tracked tab
 // closing) and once a minute by SCREEN_TIME_ALARM_NAME to checkpoint a
@@ -796,7 +823,8 @@ async function checkpointScreenTime(newDomain, newTabId = null) {
     const current = data[SCREEN_TIME_CURRENT_KEY];
     const now = Date.now();
     if (current && current.domain) {
-      await addScreenTimeSecondsLocked(current.domain, (now - current.startedAt) / 1000);
+      const elapsed = (now - current.startedAt) / 1000;
+      await addScreenTimeSecondsLocked(current.domain, await secondsWithSomeoneThere(elapsed));
     }
     if (newDomain) {
       await browser.storage.local.set({
@@ -1297,8 +1325,12 @@ async function handleTabUrl(tabId, url) {
     if (lastFocused && lastFocused.id !== currentTab.windowId) return;
   } catch (err) {}
 
+  const landedByClosing = (tabLandedByCloseUntil.get(tabId) || 0) > Date.now();
+  tabLandedByCloseUntil.delete(tabId);
+  const forgiven = landedByClosing && session.lockMode === "hard";
+
   await openViolationsHydrated;
-  if (!openViolationTabs.has(tabId)) {
+  if (!forgiven && !openViolationTabs.has(tabId)) {
     openViolationTabs.add(tabId);
     persistOpenViolationTabs();
     if (session.source === "browser-only") {
@@ -1551,7 +1583,14 @@ async function isWindowFocused(windowId) {
   }
 }
 
+const TAB_CLOSE_LANDING_MS = 1500;
+const lastTabClosedAtByWindow = new Map();
+const tabLandedByCloseUntil = new Map();
+
 browser.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  if (Date.now() - (lastTabClosedAtByWindow.get(windowId) || 0) < TAB_CLOSE_LANDING_MS) {
+    tabLandedByCloseUntil.set(tabId, Date.now() + TAB_CLOSE_LANDING_MS);
+  }
   // The tab just switched away from is now a background tab -- cloak it
   // right away instead of waiting for the next periodic tick.
   sweepTabsForCloak();
@@ -1608,7 +1647,9 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-browser.tabs.onRemoved.addListener((tabId) => {
+browser.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  if (removeInfo && !removeInfo.isWindowClosing) lastTabClosedAtByWindow.set(removeInfo.windowId, Date.now());
+  tabLandedByCloseUntil.delete(tabId);
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
   switchAwayAttemptsByTab.delete(tabId);
