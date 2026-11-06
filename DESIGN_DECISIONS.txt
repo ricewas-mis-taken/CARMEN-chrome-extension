@@ -497,3 +497,15 @@ the same day's live-connection entry there changes nothing for the extension).
   The extension does not send any of these yet, so for now its pauses count as "checking" and its unblocks carry no
   plan. TODO here: a reason picker on the popup's pause button, and an unblock prompt (why / plan / minutes) that
   handles the 429 wait, mirrored into chrome/ and firefox/.
+
+2026-11-05  Pause panel in the popup, budget computed in the popup
+  The popup's Pause Timer button now opens a panel in place (not a new window, not a prompt()): four reasons, a
+  one-line note, and the pause budget left. "Checking something else" needs a note, so the free reasons stay one tap
+  and the budgeted one costs a sentence. Sent as {"reason","note"} on POST /session/pause.
+  Chose to work the budget out in the popup from the session's violationLog (core/pause-panel.js liveBudget, the same
+  rules as carmen-desktop's pause_budget.live) rather than add a /pause/budget route: the log is already in every
+  status poll, and a route would be one more call that can fail while the timer is on screen. The cost is two copies
+  of the rule; the free reasons and the 10% / 2-minute numbers must change in both.
+  A browser-only (no desktop) session has no violationLog in this shape, so the panel just shows no budget line.
+  The unblock prompt (why / plan / minutes, and the 429 wait) is still TODO.
+  Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-11-05] (same panel, pause_budget.live, pauseNote).
