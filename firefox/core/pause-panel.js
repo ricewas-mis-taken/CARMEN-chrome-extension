@@ -13,6 +13,7 @@ const CHOICES = [
   ["interrupted", "Interrupted", "Free"],
   ["stuck", "Stuck", "Free"],
   ["checking", "Checking something else", "Uses your pause budget"],
+  ["later", "Not sure yet", "Asks what it was when you resume"],
 ];
 
 const clock = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, "0")}`;
@@ -43,7 +44,8 @@ export function liveBudget(session, now = Date.now()) {
       openAt = null;
     }
   }
-  if (openAt !== null) used += counted(openReason, openMinutes, (now - openAt) / 1000);
+  // "Not sure yet" is free while it is open; the desktop asks what it was when it ends.
+  if (openAt !== null && openReason !== "later") used += counted(openReason, openMinutes, (now - openAt) / 1000);
   const budget = Math.max(BUDGET_MIN_S, Math.floor(length * BUDGET_SHARE));
   return { budget, used, left: Math.max(0, budget - used), over: Math.max(0, used - budget) };
 }
