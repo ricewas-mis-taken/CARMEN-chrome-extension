@@ -844,39 +844,40 @@ textarea#whitelist {
   margin-top: 8px;
 }
 
-/* Pause panel: reason, a line of why, and the pause budget. */
+/* Pause panel: one big Pause button, then one-tap reason chips. */
 .pause-panel {
   margin-bottom: 16px;
   padding: 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--surface);
+  display: grid;
+  gap: 10px;
 }
-.pause-panel-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
-.pause-panel-budget { font-size: 12.5px; font-weight: 600; margin-bottom: 10px; color: var(--mint); }
-.pause-panel-budget.low { color: var(--amber); }
-.pause-panel-budget.over { color: var(--rose); }
-.pause-panel-choices { display: grid; gap: 6px; margin-bottom: 10px; }
-.pause-choice {
-  display: flex; justify-content: space-between; align-items: center; gap: 8px;
-  padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: transparent; color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+.pause-panel.busy { opacity: 0.6; pointer-events: none; }
+.pause-panel-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.pause-panel-main {
+  padding: 13px 0; border: none; border-radius: 12px; cursor: pointer;
+  background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14.5px; font-weight: 700;
 }
-.pause-choice small { font-size: 11px; font-weight: 500; opacity: 0.65; }
-.pause-choice:hover { border-color: var(--accent); }
-.pause-choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+.pause-panel-main:hover { background: var(--accent-strong); }
+.pause-panel-or { font-size: 12px; color: var(--ink); opacity: 0.6; margin-top: 2px; }
+.pause-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pause-chip {
+  padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; background: transparent;
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.pause-chip:hover { border-color: var(--accent); }
+.pause-chip.selected { border-color: var(--accent); background: var(--accent-soft); }
+.pause-chip.dark { background: var(--accent); color: var(--on-accent); border-color: var(--accent); flex: 0 0 auto; padding: 9px 16px; }
+.pause-detail { display: flex; gap: 8px; }
+.pause-detail.hidden { display: none; }
+.pause-chip.small { flex: 1; padding: 8px 0; }
 .pause-panel-note {
-  width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
+  flex: 1; min-width: 0; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px;
   background: var(--paper); color: var(--ink); font: inherit; font-size: 13px;
 }
 .pause-panel-note:focus { outline: none; border-color: var(--accent); }
-.pause-panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.pause-panel-go { padding: 8px 18px; }
-.pause-panel-go:disabled { opacity: 0.45; cursor: default; }
-
-.pause-panel-minutes { display: flex; gap: 6px; margin-bottom: 10px; }
-.pause-minutes-chip {
-  flex: 1; padding: 7px 0; border: 1px solid var(--line); border-radius: 10px; background: transparent;
-  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-}
-.pause-minutes-chip.selected { border-color: var(--accent); background: var(--accent-soft); }
+.pause-panel-status { font-size: 12px; color: var(--rose); min-height: 0; }
+.pause-panel-status:empty { display: none; }
+.pause-panel-cancel { justify-self: center; }
