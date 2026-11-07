@@ -509,3 +509,11 @@ the same day's live-connection entry there changes nothing for the extension).
   A browser-only (no desktop) session has no violationLog in this shape, so the panel just shows no budget line.
   The unblock prompt (why / plan / minutes, and the 429 wait) is still TODO.
   Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-11-05] (same panel, pause_budget.live, pauseNote).
+
+2026-11-06  Long break: a pause with a length, free for that long
+  A pause that ran for an hour counted fully against the pause budget, but sometimes a real long break is wanted.
+  Chose a fifth reason, "Long break", with minutes set up front (15/30/60/90), over capping a pause's cost or a daily
+  allowance: the time is declared, so it can be free, and time past it (plus a minute's grace) counts as overrun.
+  Sent as {"reason":"long_break","minutes"} on POST /session/pause; the desktop stores pauseMinutes on the marker and
+  toasts when the time is up. core/pause-panel.js liveBudget applies the same split as the desktop's pause_budget.
+  Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-11-06] (same rule, the "break is up" toast).
