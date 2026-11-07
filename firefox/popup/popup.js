@@ -394,8 +394,8 @@ pauseBtn.addEventListener("click", async () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   if (willPause && !pauseTargetsReview) {
     // Pausing asks why (and shows the pause budget) before anything is paused.
-    openPausePanel(pauseBtn, latestSession, async ({ reason, note }) => {
-      const response = await sendMessageSafe({ type: "pauseSession", reason, note });
+    openPausePanel(pauseBtn, latestSession, async ({ reason, note, minutes }) => {
+      const response = await sendMessageSafe({ type: "pauseSession", reason, note, minutes });
       if (response?.ok) refreshStatus();
       return !!response?.ok;
     });

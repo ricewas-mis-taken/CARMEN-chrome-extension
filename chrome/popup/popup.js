@@ -392,8 +392,8 @@ pauseBtn.addEventListener("click", () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
   if (willPause && !pauseTargetsReview) {
     // Pausing asks why (and shows the pause budget) before anything is paused.
-    openPausePanel(pauseBtn, latestSession, ({ reason, note }) => new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: "pauseSession", reason, note }, (response) => {
+    openPausePanel(pauseBtn, latestSession, ({ reason, note, minutes }) => new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "pauseSession", reason, note, minutes }, (response) => {
         if (response?.ok) refreshStatus();
         resolve(!!response?.ok);
       });

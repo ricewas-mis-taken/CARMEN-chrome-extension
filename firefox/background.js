@@ -2112,7 +2112,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await apiFetch("/session/pause", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: message.reason, note: message.note }),
+          body: JSON.stringify({ reason: message.reason, note: message.note, minutes: message.minutes }),
         });
         await browser.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
