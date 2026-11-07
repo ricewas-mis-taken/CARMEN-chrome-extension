@@ -517,3 +517,12 @@ the same day's live-connection entry there changes nothing for the extension).
   Sent as {"reason":"long_break","minutes"} on POST /session/pause; the desktop stores pauseMinutes on the marker and
   toasts when the time is up. core/pause-panel.js liveBudget applies the same split as the desktop's pause_budget.
   Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-11-06] (same rule, the "break is up" toast).
+
+2026-11-06  "Not sure yet": say what a pause was when it ends
+  Pausing asked for a reason before anything was paused, but the reason is often not known yet, and an unlabelled
+  pause counted against the budget. Chose a sixth reason, "Not sure yet" (later): free while open, and when the pause
+  ends the desktop asks what it was (break, interrupted, stuck, checking); under 2 minutes it is just called a break.
+  The answer is written onto the pause, so only "checking" counts. Never answered means it counts like checking.
+  The extension only sends reason "later"; the question is the desktop's popup, since the desktop owns the log.
+  Not done here: auto-ending an abandoned pause, idle time not counting, a per-pause cap (all weighed, not built).
+  Cross-reference: carmen-desktop DESIGN_DECISIONS.txt [2026-11-06] "Not sure yet".
