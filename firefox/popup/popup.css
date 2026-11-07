@@ -873,3 +873,10 @@ textarea#whitelist {
 .pause-panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .pause-panel-go { padding: 8px 18px; }
 .pause-panel-go:disabled { opacity: 0.45; cursor: default; }
+
+.pause-panel-minutes { display: flex; gap: 6px; margin-bottom: 10px; }
+.pause-minutes-chip {
+  flex: 1; padding: 7px 0; border: 1px solid var(--line); border-radius: 10px; background: transparent;
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.pause-minutes-chip.selected { border-color: var(--accent); background: var(--accent-soft); }

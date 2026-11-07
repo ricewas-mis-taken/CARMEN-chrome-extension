@@ -1,13 +1,15 @@
 // The pause panel: why are you pausing, in a few words, and how much of the pause budget is left.
 // Mirrors carmen-desktop's pause_budget.py (the same free reasons, 10% of the session, at least 2 minutes).
 
-const FREE = new Set(["break", "interrupted", "stuck", "rest", "aside"]);
+const FREE = new Set(["break", "long_break", "interrupted", "stuck", "rest", "aside"]);
+const LONG_BREAK_GRACE_S = 60;
 const BUDGET_SHARE = 0.1;
 const BUDGET_MIN_S = 120;
 const POINT_EVERY_S = 180;
 
 const CHOICES = [
   ["break", "Break", "Free"],
+  ["long_break", "Long break", "Free for the time you set"],
   ["interrupted", "Interrupted", "Free"],
   ["stuck", "Stuck", "Free"],
   ["checking", "Checking something else", "Uses your pause budget"],
@@ -23,18 +25,25 @@ export function liveBudget(session, now = Date.now()) {
   let used = 0;
   let openAt = null;
   let openReason = null;
+  let openMinutes = null;
+  // A long break is free for the minutes set (plus a minute's grace); the time past that counts.
+  const counted = (reason, minutes, seconds) => {
+    if (reason === "long_break" && minutes) return Math.max(0, seconds - (minutes * 60 + LONG_BREAK_GRACE_S));
+    return FREE.has(reason) ? 0 : seconds;
+  };
   for (const m of session.violationLog) {
     const at = Date.parse(m.timestamp || "");
     if (Number.isNaN(at)) continue;
     if (m.kind === "pause" && openAt === null) {
       openAt = at;
       openReason = m.pauseReason || "unspecified";
+      openMinutes = m.pauseMinutes || null;
     } else if (m.kind === "resume" && openAt !== null) {
-      if (!FREE.has(openReason)) used += (at - openAt) / 1000;
+      used += counted(openReason, openMinutes, (at - openAt) / 1000);
       openAt = null;
     }
   }
-  if (openAt !== null && !FREE.has(openReason)) used += (now - openAt) / 1000;
+  if (openAt !== null) used += counted(openReason, openMinutes, (now - openAt) / 1000);
   const budget = Math.max(BUDGET_MIN_S, Math.floor(length * BUDGET_SHARE));
   return { budget, used, left: Math.max(0, budget - used), over: Math.max(0, used - budget) };
 }
@@ -82,6 +91,7 @@ export function openPausePanel(anchor, session, submit) {
     b.addEventListener("click", () => {
       reason = key;
       buttons.forEach((x) => x.classList.toggle("selected", x === b));
+      minutesRow.classList.toggle("hidden", key !== "long_break");
       input.placeholder = key === "checking" ? "What are you checking?" : "Say why, in a few words (optional)";
       sync();
       input.focus();
@@ -90,6 +100,25 @@ export function openPausePanel(anchor, session, submit) {
     list.append(b);
   }
   panel.append(list);
+
+  const minutesRow = document.createElement("div");
+  minutesRow.className = "pause-panel-minutes hidden";
+  let minutes = 30;
+  const minuteButtons = [];
+  for (const m of [15, 30, 60, 90]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pause-minutes-chip";
+    b.textContent = `${m} min`;
+    b.addEventListener("click", () => {
+      minutes = m;
+      minuteButtons.forEach((x) => x.classList.toggle("selected", x === b));
+    });
+    if (m === minutes) b.classList.add("selected");
+    minuteButtons.push(b);
+    minutesRow.append(b);
+  }
+  panel.append(minutesRow);
 
   const input = document.createElement("input");
   input.type = "text";
@@ -121,7 +150,11 @@ export function openPausePanel(anchor, session, submit) {
   const send = async () => {
     if (go.disabled) return;
     go.disabled = true;
-    const ok = await submit({ reason, note: input.value.trim() || undefined });
+    const ok = await submit({
+      reason,
+      note: input.value.trim() || undefined,
+      minutes: reason === "long_break" ? minutes : undefined,
+    });
     if (ok) close();
     else {
       go.textContent = "Desktop app unreachable — try again";
