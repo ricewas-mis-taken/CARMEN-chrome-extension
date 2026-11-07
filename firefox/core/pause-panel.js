@@ -1,27 +1,27 @@
-// The pause panel: why are you pausing, in a few words, and how much of the pause budget is left.
-// Mirrors carmen-desktop's pause_budget.py (the same free reasons, 10% of the session, at least 2 minutes).
+// The pause panel: one big Pause button (what it was is asked when you resume), and small reason chips for
+// saying it now. A chip pauses with one tap; only a long break (how long) and checking (what) need one more bit.
+// liveBudget mirrors carmen-desktop's pause_budget.py (the same free reasons, 10% of the session, at least
+// 2 minutes) for anything in the popup that wants the budget; the desktop shows it on the task card.
 
 const FREE = new Set(["break", "long_break", "interrupted", "stuck", "rest", "aside"]);
 const LONG_BREAK_GRACE_S = 60;
 const BUDGET_SHARE = 0.1;
 const BUDGET_MIN_S = 120;
-const POINT_EVERY_S = 180;
 
-const CHOICES = [
-  ["break", "Break", "Free"],
-  ["long_break", "Long break", "Free for the time you set"],
-  ["interrupted", "Interrupted", "Free"],
-  ["stuck", "Stuck", "Free"],
-  ["checking", "Checking something else", "Uses your pause budget"],
-  ["later", "Not sure yet", "Asks what it was when you resume"],
+const CHIPS = [
+  ["break", "Break", "A real rest. Free."],
+  ["long_break", "Long break", "A rest you set a length for. Free for that long."],
+  ["interrupted", "Interrupted", "Something outside your control. Free."],
+  ["stuck", "Stuck", "You are blocked on the work. Free."],
+  ["checking", "Checking", "Looking at something else. Uses your pause budget."],
 ];
 
-const clock = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, "0")}`;
-
-// {budget, used, left, over} in seconds for the running session, or null when the desktop's log is not there.
+// {budget, used, left, over} in seconds for the running session, or null when there is no budget to show:
+// no desktop log, or a session with no length (Burnout, a review or first attempt timed as a stopwatch).
 export function liveBudget(session, now = Date.now()) {
   const start = Date.parse(session?.startTime || "");
   if (!session?.isActive || Number.isNaN(start) || !Array.isArray(session.violationLog)) return null;
+  if (session.isBurnout || session.source === "review") return null;
   const length = Math.max(0, (now - start) / 1000) + (session.secondsRemaining || 0);
   let used = 0;
   let openAt = null;
@@ -50,126 +50,109 @@ export function liveBudget(session, now = Date.now()) {
   return { budget, used, left: Math.max(0, budget - used), over: Math.max(0, used - budget) };
 }
 
-export function budgetText(live) {
-  if (!live) return { text: "", tone: "" };
-  if (live.over > 0) {
-    return { text: `Over budget by ${clock(live.over)}. Each 3 more minutes costs a point.`, tone: "over" };
-  }
-  return { text: `${clock(live.left)} of ${clock(live.budget)} pause budget left`, tone: live.left < live.budget * 0.3 ? "low" : "ok" };
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-// Replaces the pause button with the panel; `submit({reason, note})` pauses, `close()` brings the button back.
+// Replaces the pause button with the panel; `submit({reason, note, minutes})` pauses and resolves true when it
+// worked, and the panel closes. "Keep working" (or Esc) brings the button back.
 export function openPausePanel(anchor, session, submit) {
-  const panel = document.createElement("div");
-  panel.className = "pause-panel";
+  const panel = el("div", "pause-panel");
+  panel.append(el("div", "pause-panel-title", "Pause the timer"));
 
-  const heading = document.createElement("div");
-  heading.className = "pause-panel-title";
-  heading.textContent = "Why pause?";
-  panel.append(heading);
-
-  const { text, tone } = budgetText(liveBudget(session));
-  if (text) {
-    const budget = document.createElement("div");
-    budget.className = `pause-panel-budget ${tone}`;
-    budget.textContent = text;
-    panel.append(budget);
-  }
-
-  let reason = null;
-  const buttons = [];
-  const list = document.createElement("div");
-  list.className = "pause-panel-choices";
-  for (const [key, label, hint] of CHOICES) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "pause-choice";
-    b.dataset.reason = key;
-    const name = document.createElement("span");
-    name.textContent = label;
-    const note = document.createElement("small");
-    note.textContent = hint;
-    b.append(name, note);
-    b.addEventListener("click", () => {
-      reason = key;
-      buttons.forEach((x) => x.classList.toggle("selected", x === b));
-      minutesRow.classList.toggle("hidden", key !== "long_break");
-      input.placeholder = key === "checking" ? "What are you checking?" : "Say why, in a few words (optional)";
-      sync();
-      input.focus();
-    });
-    buttons.push(b);
-    list.append(b);
-  }
-  panel.append(list);
-
-  const minutesRow = document.createElement("div");
-  minutesRow.className = "pause-panel-minutes hidden";
-  let minutes = 30;
-  const minuteButtons = [];
-  for (const m of [15, 30, 60, 90]) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "pause-minutes-chip";
-    b.textContent = `${m} min`;
-    b.addEventListener("click", () => {
-      minutes = m;
-      minuteButtons.forEach((x) => x.classList.toggle("selected", x === b));
-    });
-    if (m === minutes) b.classList.add("selected");
-    minuteButtons.push(b);
-    minutesRow.append(b);
-  }
-  panel.append(minutesRow);
-
-  const input = document.createElement("input");
-  input.type = "text";
-  input.maxLength = 200;
-  input.className = "pause-panel-note";
-  input.placeholder = "Say why, in a few words (optional)";
-  panel.append(input);
-
-  const row = document.createElement("div");
-  row.className = "pause-panel-actions";
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "ghost-btn";
-  cancel.textContent = "Keep working";
-  const go = document.createElement("button");
-  go.type = "button";
-  go.className = "secondary-btn pause-panel-go";
-  go.textContent = "Pause";
-  row.append(cancel, go);
-  panel.append(row);
-
-  function sync() {
-    go.disabled = reason === null || (reason === "checking" && !input.value.trim());
-  }
   const close = () => {
     panel.remove();
     anchor.classList.remove("hidden");
   };
-  const send = async () => {
-    if (go.disabled) return;
-    go.disabled = true;
-    const ok = await submit({
-      reason,
-      note: input.value.trim() || undefined,
-      minutes: reason === "long_break" ? minutes : undefined,
-    });
-    if (ok) close();
-    else {
-      go.textContent = "Desktop app unreachable — try again";
-      setTimeout(() => { go.textContent = "Pause"; sync(); }, 2500);
+  let busy = false;
+  const send = async (payload) => {
+    if (busy) return;
+    busy = true;
+    panel.classList.add("busy");
+    const ok = await submit(payload);
+    busy = false;
+    panel.classList.remove("busy");
+    if (ok) {
+      close();
+    } else {
+      status.textContent = "Desktop app unreachable. Try again.";
+      setTimeout(() => { status.textContent = ""; }, 2500);
     }
   };
-  input.addEventListener("input", sync);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); if (e.key === "Escape") close(); });
+
+  const main = el("button", "pause-panel-main", "Pause");
+  main.type = "button";
+  main.title = "Pause now. Carmen asks what it was when you resume.";
+  main.addEventListener("click", () => send({ reason: "later" }));
+  panel.append(main);
+
+  panel.append(el("div", "pause-panel-or", "Or say why now"));
+
+  const grid = el("div", "pause-chips");
+  const chips = {};
+  const minutesRow = el("div", "pause-detail hidden");
+  const noteRow = el("div", "pause-detail hidden");
+
+  for (const [key, label, tip] of CHIPS) {
+    const chip = el("button", "pause-chip", label);
+    chip.type = "button";
+    chip.title = tip;
+    chip.addEventListener("click", () => {
+      if (key === "long_break" || key === "checking") {
+        minutesRow.classList.toggle("hidden", key !== "long_break");
+        noteRow.classList.toggle("hidden", key !== "checking");
+        chips.long_break.classList.toggle("selected", key === "long_break");
+        chips.checking.classList.toggle("selected", key === "checking");
+        if (key === "checking") input.focus();
+      } else {
+        send({ reason: key });
+      }
+    });
+    chips[key] = chip;
+    grid.append(chip);
+  }
+  panel.append(grid);
+
+  // Long break: how long, one tap.
+  for (const m of [15, 30, 60, 90]) {
+    const b = el("button", "pause-chip small", `${m} min`);
+    b.type = "button";
+    b.addEventListener("click", () => send({ reason: "long_break", minutes: m }));
+    minutesRow.append(b);
+  }
+  panel.append(minutesRow);
+
+  // Checking: what, then Pause.
+  const input = el("input", "pause-panel-note");
+  input.type = "text";
+  input.maxLength = 200;
+  input.placeholder = "What are you checking?";
+  const confirm = el("button", "pause-chip dark", "Pause");
+  confirm.type = "button";
+  const sendChecking = () => {
+    const note = input.value.trim();
+    if (note) send({ reason: "checking", note });
+    else input.focus();
+  };
+  confirm.addEventListener("click", sendChecking);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChecking(); });
+  noteRow.append(input, confirm);
+  panel.append(noteRow);
+
+  const status = el("div", "pause-panel-status");
+  panel.append(status);
+
+  const cancel = el("button", "ghost-btn pause-panel-cancel", "Keep working");
+  cancel.type = "button";
   cancel.addEventListener("click", close);
-  go.addEventListener("click", send);
-  sync();
+  panel.append(cancel);
+  panel.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
   anchor.classList.add("hidden");
   anchor.after(panel);
+  main.focus();
   return panel;
 }
