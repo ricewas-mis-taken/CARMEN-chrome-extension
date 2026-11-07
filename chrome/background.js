@@ -2064,7 +2064,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!local.isActive) return false;
         if (local.isPaused) return true;
         const remainingMs = Math.max(0, local.endTime - Date.now());
-        const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now() }];
+        const pauseEvents = [...(local.pauseEvents || []), { kind: "pause", timestamp: Date.now(), reason: message.reason }];
         await setLocalSession({ ...local, isPaused: true, pausedRemainingMs: remainingMs, pauseEvents });
         return true;
       });
@@ -2075,7 +2075,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       try {
-        await apiFetch("/session/pause", { method: "POST" });
+        await apiFetch("/session/pause", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: message.reason, note: message.note, minutes: message.minutes }),
+        });
         await chrome.alarms.clear(ALARM_NAME);
         sendResponse({ ok: true });
       } catch (err) {

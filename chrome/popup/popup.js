@@ -2,6 +2,7 @@ import { getCachedRules } from "../core/rules-cache.js";
 import { saveWhitelist } from "../core/rules-client.js";
 import { getApiToken, setApiToken } from "../core/api-token.js";
 import { applyDesktopTheme } from "../core/theme-sync.js";
+import { openPausePanel } from "../core/pause-panel.js";
 
 applyDesktopTheme();
 
@@ -389,6 +390,16 @@ pomodoroResumeBtn.addEventListener("click", () => {
 
 pauseBtn.addEventListener("click", () => {
   const willPause = !pauseBtn.classList.contains("is-paused");
+  if (willPause && !pauseTargetsReview) {
+    // Pausing asks why (and shows the pause budget) before anything is paused.
+    openPausePanel(pauseBtn, latestSession, ({ reason, note, minutes }) => new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "pauseSession", reason, note, minutes }, (response) => {
+        if (response?.ok) refreshStatus();
+        resolve(!!response?.ok);
+      });
+    }));
+    return;
+  }
   pauseBtn.disabled = true;
   chrome.runtime.sendMessage(
     { type: pauseTargetsReview ? "pauseReview" : willPause ? "pauseSession" : "resumeSession" },
@@ -653,7 +664,10 @@ function stopCountdown() {
   }
 }
 
+let latestSession = null;
+
 function renderActiveSession(session) {
+  latestSession = session;
   showActiveView();
   const isHard = session.lockMode === "hard";
   lockModeBadgeEl.textContent = isHard ? "Hard Lock" : "Soft Lock";
